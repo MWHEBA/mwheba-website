@@ -80,7 +80,8 @@ export async function addToCartAction(
  */
 export async function updateCartItemQuantityAction(
   itemId: string,
-  quantity: number
+  quantity: number,
+  operationKey: string
 ): Promise<CartCalculationSummary> {
   const payload = await getPayload({ config: configPromise });
   const cartId = await getSessionCartId();
@@ -88,7 +89,7 @@ export async function updateCartItemQuantityAction(
     throw new Error('CART_NOT_FOUND: No active cart session.');
   }
 
-  const summary = await updateItemQuantity(payload, cartId, itemId, quantity);
+  const summary = await updateItemQuantity(payload, cartId, itemId, quantity, operationKey);
   revalidatePath('/[locale]/store', 'layout');
   revalidatePath('/[locale]/checkout', 'page');
   return summary;
@@ -98,7 +99,8 @@ export async function updateCartItemQuantityAction(
  * Server Action: Removes a line item from the persistent cart in PostgreSQL.
  */
 export async function removeCartItemAction(
-  itemId: string
+  itemId: string,
+  operationKey: string
 ): Promise<CartCalculationSummary> {
   const payload = await getPayload({ config: configPromise });
   const cartId = await getSessionCartId();
@@ -106,7 +108,7 @@ export async function removeCartItemAction(
     throw new Error('CART_NOT_FOUND: No active cart session.');
   }
 
-  const summary = await removeItemFromCart(payload, cartId, itemId);
+  const summary = await removeItemFromCart(payload, cartId, itemId, operationKey);
   revalidatePath('/[locale]/store', 'layout');
   revalidatePath('/[locale]/checkout', 'page');
   return summary;
@@ -115,7 +117,9 @@ export async function removeCartItemAction(
 /**
  * Server Action: Clears all items in the persistent cart in PostgreSQL.
  */
-export async function clearCartAction(): Promise<CartCalculationSummary> {
+export async function clearCartAction(
+  operationKey: string
+): Promise<CartCalculationSummary> {
   const payload = await getPayload({ config: configPromise });
   const cartId = await getSessionCartId();
   if (!cartId) {
@@ -132,7 +136,7 @@ export async function clearCartAction(): Promise<CartCalculationSummary> {
     };
   }
 
-  const summary = await clearPersistentCart(payload, cartId);
+  const summary = await clearPersistentCart(payload, cartId, operationKey);
   revalidatePath('/[locale]/store', 'layout');
   revalidatePath('/[locale]/checkout', 'page');
   return summary;

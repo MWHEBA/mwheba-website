@@ -8,13 +8,23 @@ import {
   removeItemFromCart,
   clearPersistentCart,
   getCartSummary,
+  withCartLock,
 } from '../src/modules/cart-checkout/services/cartStorage';
 import {
   assertCartCanCheckout,
 } from '../src/modules/cart-checkout/services/cartCalculator';
+import {
+  generateOperationKey,
+  executeWithOperationRetry,
+} from '../src/modules/cart-checkout/logic/idempotency';
 import { POST as validateCheckoutRoute } from '../src/app/api/cart/validate-checkout/route';
+import {
+  POST as cartItemsPostRoute,
+  GET as cartItemsGetRoute,
+  PATCH as cartItemsPatchRoute,
+  DELETE as cartItemsDeleteRoute,
+} from '../src/app/api/cart/items/route';
 import { signCartId } from '../src/modules/cart-checkout/logic/cartSession';
-import { withCartLock } from '../src/modules/cart-checkout/services/cartStorage';
 import { NextRequest } from 'next/server';
 
 describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () => {
@@ -30,6 +40,10 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
   let serviceProduct: any;
   let variantA1: any; // Black
   let variantA2: any; // Blue
+
+  function createdVariantIds(id: string | number) {
+    createdVariantOptionIds.push(id);
+  }
 
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
@@ -149,32 +163,33 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
     createdProductIds.push(serviceProduct.id);
   }, 30000);
 
-  function createdVariantIds(id: string | number) {
-    // Helper to register variant for teardown
-    // Variants are cleaned up through payload
-  }
-
   afterAll(async () => {
-    for (const cId of createdCartIds) {
+    // Clean up created carts
+    for (const cartId of createdCartIds) {
       try {
-        await payload.delete({ collection: 'carts', id: cId });
+        await payload.delete({ collection: 'carts', id: cartId });
       } catch {}
     }
-    for (const pId of createdProductIds) {
+
+    // Clean up created products and categories
+    for (const prodId of createdProductIds) {
       try {
-        await payload.delete({ collection: 'products', id: pId });
+        await payload.delete({ collection: 'products', id: prodId });
       } catch {}
     }
+
     for (const optId of createdVariantOptionIds) {
       try {
         await payload.delete({ collection: 'variantOptions', id: optId });
       } catch {}
     }
-    for (const vtId of createdVariantTypeIds) {
+
+    for (const typeId of createdVariantTypeIds) {
       try {
-        await payload.delete({ collection: 'variantTypes', id: vtId });
+        await payload.delete({ collection: 'variantTypes', id: typeId });
       } catch {}
     }
+
     for (const catId of createdCategoryIds) {
       try {
         await payload.delete({ collection: 'categories', id: catId });
@@ -187,11 +202,14 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
+      const opKey = generateOperationKey('add');
+
       // Add 5 units of Product A Variant 1
       const summary = await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
         variantId: variantA1.id,
         quantity: 5,
+        operationKey: opKey,
       });
 
       // Verify returned summary
@@ -224,6 +242,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         productId: physicalProductA.id,
         variantId: variantA1.id,
         quantity: 5,
+        operationKey: generateOperationKey('add'),
       });
 
       // 2. Add 5 Blue units of the SAME Product A
@@ -231,6 +250,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         productId: physicalProductA.id,
         variantId: variantA2.id,
         quantity: 5,
+        operationKey: generateOperationKey('add'),
       });
 
       // Assertions
@@ -262,12 +282,14 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         productId: physicalProductA.id,
         variantId: variantA1.id,
         quantity: 5,
+        operationKey: generateOperationKey('add'),
       });
 
       // Add 5 of Product B
       const summary = await addItemToCart(payload, cart.id, {
         productId: physicalProductB.id,
         quantity: 5,
+        operationKey: generateOperationKey('add'),
       });
 
       // Total items in cart is 10, BUT neither product satisfies 10 MOQ
@@ -300,6 +322,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         quantity: 10,
         artworkAssetId: 'mock-vector-logo-asset-123',
         printingNotes: 'حفر ليزر بدقة عالية على الوجهين للشعار المؤسسي',
+        operationKey: generateOperationKey('add'),
       });
 
       // Base: 10 * 250 = 2500 EGP
@@ -324,6 +347,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
         quantity: 5,
+        operationKey: generateOperationKey('add'),
       });
 
       // Construct a direct HTTP POST request with valid signed session cookie
@@ -354,6 +378,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
         quantity: 10,
+        operationKey: generateOperationKey('add'),
       });
 
       const signedCookie = signCartId(cart.id);
@@ -371,39 +396,17 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const json = await response.json();
       expect(json.success).toBe(true);
       expect(json.canCheckout).toBe(true);
-      expect(json.summary.totalItemsCount).toBe(10);
+      expect(json.summary.productGroupings[physicalProductA.id].isSatisfied).toBe(true);
     });
 
-    it('rejects arbitrary or guessed cartId without valid signed cookie with HTTP 403', async () => {
-      const targetCart = await getOrCreateCart(payload);
-      createdCartIds.push(targetCart.id);
-
-      // Attacker attempts to send cartId in body without session cookie
-      const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cartId: targetCart.id }),
-      });
-
-      const response = await validateCheckoutRoute(req);
-      expect(response.status).toBe(403);
-      const json = await response.json();
-      expect(json.error).toBe('FORBIDDEN_CART_ACCESS');
-    });
-
-    it('rejects cross-session tampering when body cartId does not match verified session cookie with HTTP 403', async () => {
-      const userCart = await getOrCreateCart(payload);
+    it('strictly rejects arbitrary or guessed cartId without valid session cookie with HTTP 403', async () => {
       const victimCart = await getOrCreateCart(payload);
-      createdCartIds.push(userCart.id);
       createdCartIds.push(victimCart.id);
 
-      // User holds signed cookie for userCart, but submits victimCart in request body
-      const userCookie = signCartId(userCart.id);
       const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Cookie: `mwheba_cart=${userCookie}`,
         },
         body: JSON.stringify({ cartId: victimCart.id }),
       });
@@ -413,19 +416,204 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const json = await response.json();
       expect(json.error).toBe('FORBIDDEN_CART_ACCESS');
     });
+
+    it('strictly rejects cross-session tampering when body cartId does not match signed cookie with HTTP 403', async () => {
+      const legitimateCart = await getOrCreateCart(payload);
+      const targetCart = await getOrCreateCart(payload);
+      createdCartIds.push(legitimateCart.id, targetCart.id);
+
+      const legitimateCookie = signCartId(legitimateCart.id);
+
+      const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `mwheba_cart=${legitimateCookie}`,
+        },
+        body: JSON.stringify({ cartId: targetCart.id }),
+      });
+
+      const response = await validateCheckoutRoute(req);
+      expect(response.status).toBe(403);
+      const json = await response.json();
+      expect(json.error).toBe('FORBIDDEN_CART_ACCESS');
+    });
   });
 
-  describe('6. Concurrent Cart Modifications & Concurrency Lock', () => {
+  describe('6. Mandatory Idempotent OperationKey & End-to-End Route Resilience', () => {
+    it('strictly rejects cart mutations when operationKey is missing or empty', async () => {
+      const cart = await getOrCreateCart(payload);
+      createdCartIds.push(cart.id);
+
+      // Missing in service function
+      await expect(
+        addItemToCart(payload, cart.id, {
+          productId: physicalProductA.id,
+          quantity: 5,
+        } as any)
+      ).rejects.toThrow(/MISSING_OPERATION_KEY/);
+
+      // Missing in HTTP Route POST /api/cart/items
+      const req = new NextRequest('http://localhost:3000/api/cart/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: physicalProductA.id,
+          quantity: 5,
+        }),
+      });
+
+      const res = await cartItemsPostRoute(req);
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBe('MISSING_OPERATION_KEY');
+    });
+
+    it('proves end-to-end idempotent retry from UI/API down to DB without quantity duplication upon lost response', async () => {
+      // 1. Client generates a deterministic operationKey BEFORE dispatching
+      const clientGeneratedOpKey = generateOperationKey('add');
+
+      // 2. First HTTP Request: Client POSTs to /api/cart/items
+      const initialReq = new NextRequest('http://localhost:3000/api/cart/items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: physicalProductA.id,
+          variantId: variantA1.id,
+          quantity: 5,
+          operationKey: clientGeneratedOpKey,
+        }),
+      });
+
+      const initialRes = await cartItemsPostRoute(initialReq);
+      expect(initialRes.status).toBe(200);
+      const initialData = await initialRes.json();
+      expect(initialData.success).toBe(true);
+      expect(initialData.summary.totalItemsCount).toBe(5);
+
+      const cartId = initialData.cartId;
+      createdCartIds.push(cartId);
+      const signedCookie = signCartId(cartId);
+
+      // 3. Client Simulates Dropped Network Connection / Response Interruption
+      // Re-executes the request reusing the EXACT SAME operationKey and session cookie
+      let networkRetryCount = 0;
+      const retryResult = await executeWithOperationRetry(
+        async (sameOpKey) => {
+          networkRetryCount++;
+          const retryReq = new NextRequest('http://localhost:3000/api/cart/items', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Cookie: `mwheba_cart=${signedCookie}`,
+            },
+            body: JSON.stringify({
+              productId: physicalProductA.id,
+              variantId: variantA1.id,
+              quantity: 5,
+              operationKey: sameOpKey,
+            }),
+          });
+
+          const retryRes = await cartItemsPostRoute(retryReq);
+          return await retryRes.json();
+        },
+        clientGeneratedOpKey,
+        {
+          maxRetries: 2,
+        }
+      );
+
+      // 4. Assert that retry did NOT double the quantity (must strictly remain 5, not 10!)
+      expect(retryResult.summary.totalItemsCount).toBe(5);
+      expect(retryResult.summary.productGroupings[physicalProductA.id].totalQuantity).toBe(5);
+
+      // 5. Verify directly in PostgreSQL: cart table has applied_operations and items quantity 5
+      const dbCart = await payload.findByID({
+        collection: 'carts',
+        id: cartId,
+        depth: 0,
+      });
+
+      expect(dbCart.items?.length).toBe(1);
+      expect(dbCart.items?.[0].quantity).toBe(5);
+      expect(Array.isArray(dbCart.appliedOperations)).toBe(true);
+      expect(dbCart.appliedOperations).toContain(clientGeneratedOpKey);
+    });
+
+    it('proves native Payload Ecommerce guest cart secret preservation and guest access', async () => {
+      // 1. Create a guest cart and verify native 40-char hex secret
+      const guestCart = await getOrCreateCart(payload);
+      createdCartIds.push(guestCart.id);
+
+      expect(guestCart.secret).toBeDefined();
+      expect(typeof guestCart.secret).toBe('string');
+      expect(guestCart.secret?.length).toBe(40);
+      const originalGuestSecret = guestCart.secret as string;
+
+      // 2. Perform multiple mutations (add, update, remove)
+      const opKeyAdd = generateOperationKey('add');
+      await addItemToCart(payload, guestCart.id, {
+        productId: physicalProductA.id,
+        quantity: 10,
+        operationKey: opKeyAdd,
+      });
+
+      const currentSummary = await getCartSummary(payload, guestCart.id);
+      const lineItemId = currentSummary.items[0].id;
+
+      const opKeyUpdate = generateOperationKey('update');
+      await updateItemQuantity(payload, guestCart.id, lineItemId, 12, opKeyUpdate);
+
+      // 3. Verify in PostgreSQL that secret was NEVER overwritten or polluted with JSON
+      const postMutationDbCart = await payload.findByID({
+        collection: 'carts',
+        id: guestCart.id,
+        depth: 0,
+      });
+
+      expect(postMutationDbCart.secret).toBe(originalGuestSecret);
+      expect(postMutationDbCart.secret?.startsWith('{')).toBe(false);
+
+      // 4. Verify Payload Ecommerce native guest query by secret succeeds
+      const guestQuery = await payload.find({
+        collection: 'carts',
+        where: {
+          secret: { equals: originalGuestSecret },
+        },
+        depth: 0,
+      });
+
+      expect(guestQuery.docs.length).toBe(1);
+      expect(guestQuery.docs[0].id).toBe(guestCart.id);
+      expect(guestQuery.docs[0].items?.length).toBe(1);
+      expect(guestQuery.docs[0].items?.[0].quantity).toBe(12);
+
+      // 5. Verify GET /api/cart/items?secret=<originalGuestSecret> returns cart state
+      const getReq = new NextRequest(
+        `http://localhost:3000/api/cart/items?secret=${originalGuestSecret}`,
+        { method: 'GET' }
+      );
+      const getRes = await cartItemsGetRoute(getReq);
+      expect(getRes.status).toBe(200);
+      const getData = await getRes.json();
+      expect(getData.cartId).toBe(guestCart.id);
+      expect(getData.summary.totalItemsCount).toBe(12);
+    });
+  });
+
+  describe('7. Concurrency Lock & Retry Mechanics', () => {
     it('serializes 5 concurrent add-to-cart operations on the same cart without data loss', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
-      // Fire 5 concurrent additions of 2 units each on the exact same cart
+      // Fire 5 concurrent additions of 2 units each on the exact same cart with distinct keys
       const additions = Array.from({ length: 5 }).map(() =>
         addItemToCart(payload, cart.id, {
           productId: physicalProductA.id,
           variantId: variantA1.id,
           quantity: 2,
+          operationKey: generateOperationKey('add'),
         })
       );
 
@@ -473,7 +661,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
-      const opKey = `test_op_idempotency_${Date.now()}`;
+      const opKey = generateOperationKey('add');
 
       // 1. Initial addition: 5 units with operationKey
       const initialSummary = await addItemToCart(payload, cart.id, {
@@ -490,7 +678,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         productId: physicalProductA.id,
         variantId: variantA1.id,
         quantity: 5,
-        operationKey: opKey, // Identical operation key on retry
+        operationKey: opKey,
       });
 
       // Assert that retry did NOT double the quantity (must strictly remain 5, not 10!)
@@ -498,9 +686,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(retrySummary.productGroupings[physicalProductA.id].totalQuantity).toBe(5);
 
       // 3. Simulate failure right after markSaved inside withCartLock
-      // withCartLock must recover the committed state and NOT re-execute or corrupt
       const recoveredSummary = await withCartLock<any>(payload, cart.id, async (lockContext) => {
-        // Mark as saved, then simulate dropped response
         lockContext.markSaved();
         throw new Error('ECONNRESET: Connection dropped after database commit');
       });
@@ -515,10 +701,11 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       });
       expect(finalDbCart.items?.length).toBe(1);
       expect(finalDbCart.items?.[0].quantity).toBe(5);
+      expect(finalDbCart.appliedOperations).toContain(opKey);
     });
   });
 
-  describe('7. Fixed-Price Service Package Single Unit Checkout', () => {
+  describe('8. Fixed-Price Service Package Single Unit Checkout', () => {
     it('allows checkout for digital service package with 1 unit', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
@@ -526,6 +713,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const summary = await addItemToCart(payload, cart.id, {
         productId: serviceProduct.id,
         quantity: 1,
+        operationKey: generateOperationKey('add'),
       });
 
       expect(summary.totalItemsCount).toBe(1);
@@ -536,8 +724,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
     });
   });
 
-  describe('8. Cart Quantity Update, Removal and Clear', () => {
-    it('updates quantity, removes item, and clears persistent cart cleanly', async () => {
+  describe('9. Cart Quantity Update, Removal and Clear with Mandatory OperationKey', () => {
+    it('updates quantity, removes item, and clears persistent cart cleanly with operation keys', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
@@ -545,6 +733,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
         quantity: 10,
+        operationKey: generateOperationKey('add'),
       });
 
       let summary = await getCartSummary(payload, cart.id);
@@ -552,17 +741,24 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const lineItemId = summary.items[0].id;
 
       // Update quantity to 15
-      summary = await updateItemQuantity(payload, cart.id, lineItemId, 15);
+      const updateKey = generateOperationKey('update');
+      summary = await updateItemQuantity(payload, cart.id, lineItemId, 15, updateKey);
       expect(summary.totalItemsCount).toBe(15);
       expect(summary.subtotal).toBe(3750); // 15 * 250
 
+      // Repeating the same update operationKey does NOT change anything
+      const repeatSummary = await updateItemQuantity(payload, cart.id, lineItemId, 20, updateKey);
+      expect(repeatSummary.totalItemsCount).toBe(15);
+
       // Remove item
-      summary = await removeItemFromCart(payload, cart.id, lineItemId);
+      const removeKey = generateOperationKey('remove');
+      summary = await removeItemFromCart(payload, cart.id, lineItemId, removeKey);
       expect(summary.totalItemsCount).toBe(0);
       expect(summary.canCheckout).toBe(false);
 
       // Clear cart
-      summary = await clearPersistentCart(payload, cart.id);
+      const clearKey = generateOperationKey('clear');
+      summary = await clearPersistentCart(payload, cart.id, clearKey);
       expect(summary.items.length).toBe(0);
     });
   });

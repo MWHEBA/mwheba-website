@@ -14,7 +14,7 @@ export interface CartMutationItem {
   quantity: number;
   artworkAssetId?: string;
   printingNotes?: string;
-  operationKey?: string;
+  operationKey: string;
 }
 
 export interface CartLockContext {
@@ -22,35 +22,26 @@ export interface CartLockContext {
   markSaved: () => void;
 }
 
-interface CartMetadata {
-  lastOpKey?: string;
-  appliedOps?: string[];
-}
-
-export function parseCartMetadata(secret?: string | null): CartMetadata {
-  if (!secret) return {};
-  try {
-    const parsed = JSON.parse(secret);
-    if (parsed && typeof parsed === 'object') {
-      return {
-        lastOpKey: parsed.lastOpKey,
-        appliedOps: Array.isArray(parsed.appliedOps) ? parsed.appliedOps : [],
-      };
-    }
-  } catch {
-    // Secret was plain string
-    return { lastOpKey: secret, appliedOps: [secret] };
+export function parseAppliedOperations(field: any): string[] {
+  if (Array.isArray(field)) {
+    return field.filter((k): k is string => typeof k === 'string' && Boolean(k.trim()));
   }
-  return {};
+  if (typeof field === 'string') {
+    try {
+      const parsed = JSON.parse(field);
+      return Array.isArray(parsed)
+        ? parsed.filter((k): k is string => typeof k === 'string' && Boolean(k.trim()))
+        : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
 }
 
-export function serializeCartMetadata(newOpKey: string, existingSecret?: string | null): string {
-  const meta = parseCartMetadata(existingSecret);
-  const applied = [newOpKey, ...(meta.appliedOps || []).filter((k) => k !== newOpKey)].slice(0, 50);
-  return JSON.stringify({
-    lastOpKey: newOpKey,
-    appliedOps: applied,
-  });
+export function appendAppliedOperation(newOpKey: string, existingOpsField: any): string[] {
+  const existing = parseAppliedOperations(existingOpsField);
+  return [newOpKey, ...existing.filter((k) => k !== newOpKey)].slice(0, 50);
 }
 
 const inProcessLocks = new Map<number, Promise<void>>();
@@ -278,9 +269,10 @@ export async function addItemToCart(
     }
   }
 
-  const opKey =
-    item.operationKey ||
-    `op_add_${item.productId}_${item.variantId || 0}_${item.quantity}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  if (!item.operationKey || typeof item.operationKey !== 'string' || !item.operationKey.trim()) {
+    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
+  }
+  const opKey = item.operationKey.trim();
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -289,9 +281,9 @@ export async function addItemToCart(
       depth: 0,
     });
 
-    const meta = parseCartMetadata(cart.secret);
+    const appliedOps = parseAppliedOperations(cart.appliedOperations);
     // IDEMPOTENCY GUARD: If operationKey was already applied, do NOT add again!
-    if (opKey && meta.appliedOps?.includes(opKey)) {
+    if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
       const hydrated = await hydrateCartLines(cart.items || [], payload);
       return calculateCartSummary(hydrated);
@@ -337,7 +329,7 @@ export async function addItemToCart(
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
 
-    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+    const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
 
     await payload.update({
       collection: 'carts',
@@ -345,7 +337,7 @@ export async function addItemToCart(
       data: {
         items,
         subtotal: summary.subtotal,
-        secret: updatedSecret,
+        appliedOperations: updatedOps,
       },
       depth: 0,
     });
@@ -365,16 +357,17 @@ export async function updateItemQuantity(
   cartId: number,
   itemId: string,
   newQuantity: number,
-  operationKey?: string
+  operationKey: string
 ): Promise<CartCalculationSummary> {
   const qty = Number(newQuantity);
   if (!Number.isSafeInteger(qty) || qty < 0) {
     throw new Error('INVALID_QUANTITY: Quantity must be a non-negative whole integer.');
   }
 
-  const opKey =
-    operationKey ||
-    `op_qty_${itemId}_${qty}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  if (!operationKey || typeof operationKey !== 'string' || !operationKey.trim()) {
+    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
+  }
+  const opKey = operationKey.trim();
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -383,8 +376,8 @@ export async function updateItemQuantity(
       depth: 0,
     });
 
-    const meta = parseCartMetadata(cart.secret);
-    if (opKey && meta.appliedOps?.includes(opKey)) {
+    const appliedOps = parseAppliedOperations(cart.appliedOperations);
+    if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
       const hydrated = await hydrateCartLines(cart.items || [], payload);
       return calculateCartSummary(hydrated);
@@ -408,7 +401,7 @@ export async function updateItemQuantity(
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
 
-    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+    const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
 
     await payload.update({
       collection: 'carts',
@@ -416,7 +409,7 @@ export async function updateItemQuantity(
       data: {
         items,
         subtotal: summary.subtotal,
-        secret: updatedSecret,
+        appliedOperations: updatedOps,
       },
       depth: 0,
     });
@@ -434,11 +427,12 @@ export async function removeItemFromCart(
   payload: Payload,
   cartId: number,
   itemId: string,
-  operationKey?: string
+  operationKey: string
 ): Promise<CartCalculationSummary> {
-  const opKey =
-    operationKey ||
-    `op_rm_${itemId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  if (!operationKey || typeof operationKey !== 'string' || !operationKey.trim()) {
+    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
+  }
+  const opKey = operationKey.trim();
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -447,8 +441,8 @@ export async function removeItemFromCart(
       depth: 0,
     });
 
-    const meta = parseCartMetadata(cart.secret);
-    if (opKey && meta.appliedOps?.includes(opKey)) {
+    const appliedOps = parseAppliedOperations(cart.appliedOperations);
+    if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
       const hydrated = await hydrateCartLines(cart.items || [], payload);
       return calculateCartSummary(hydrated);
@@ -458,7 +452,7 @@ export async function removeItemFromCart(
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
 
-    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+    const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
 
     await payload.update({
       collection: 'carts',
@@ -466,7 +460,7 @@ export async function removeItemFromCart(
       data: {
         items,
         subtotal: summary.subtotal,
-        secret: updatedSecret,
+        appliedOperations: updatedOps,
       },
       depth: 0,
     });
@@ -483,11 +477,12 @@ export async function removeItemFromCart(
 export async function clearPersistentCart(
   payload: Payload,
   cartId: number,
-  operationKey?: string
+  operationKey: string
 ): Promise<CartCalculationSummary> {
-  const opKey =
-    operationKey ||
-    `op_clear_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  if (!operationKey || typeof operationKey !== 'string' || !operationKey.trim()) {
+    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
+  }
+  const opKey = operationKey.trim();
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -496,13 +491,13 @@ export async function clearPersistentCart(
       depth: 0,
     });
 
-    const meta = parseCartMetadata(cart.secret);
-    if (opKey && meta.appliedOps?.includes(opKey)) {
+    const appliedOps = parseAppliedOperations(cart.appliedOperations);
+    if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
       return calculateCartSummary([]);
     }
 
-    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+    const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
 
     await payload.update({
       collection: 'carts',
@@ -510,7 +505,7 @@ export async function clearPersistentCart(
       data: {
         items: [],
         subtotal: 0,
-        secret: updatedSecret,
+        appliedOperations: updatedOps,
       },
       depth: 0,
     });

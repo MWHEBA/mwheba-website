@@ -102,6 +102,7 @@ export default buildConfig({
     pool: {
       connectionString: dbUri,
     },
+    push: false,
   }),
   plugins: [
     ecommercePlugin({
@@ -171,6 +172,14 @@ export default buildConfig({
               }
             );
           }
+          defaultCollection.fields.push({
+            name: 'appliedOperations',
+            type: 'json',
+            defaultValue: [],
+            admin: {
+              description: 'Independent idempotency operation keys applied to this cart',
+            },
+          });
           return defaultCollection;
         },
       },
