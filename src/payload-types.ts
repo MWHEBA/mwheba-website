@@ -698,7 +698,6 @@ export interface Product {
   id: number;
   title: string;
   slug: string;
-  description?: string | null;
   /**
    * Base price in EGP for products without complex variant pricing.
    */
@@ -708,6 +707,7 @@ export interface Product {
    * Compatibility alias for cart & MOQ calculation engine.
    */
   itemType?: ('physical' | 'service') | null;
+  description?: string | null;
   category?: (number | null) | Category;
   /**
    * Minimum order quantity enforced across all variants (D-009). Strictly 10 for physical, 1 for services.
@@ -1775,10 +1775,10 @@ export interface VariantOptionsSelect<T extends boolean = true> {
 export interface ProductsSelect<T extends boolean = true> {
   title?: T;
   slug?: T;
-  description?: T;
   basePrice?: T;
   productType?: T;
   itemType?: T;
+  description?: T;
   category?: T;
   minOrderQuantity?: T;
   allowArtworkUpload?: T;
