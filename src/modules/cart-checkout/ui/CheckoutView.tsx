@@ -536,12 +536,17 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
             {/* Itemized List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '1.5rem', maxHeight: '300px', overflowY: 'auto' }}>
-              {items.map((line) => {
-                const product = sampleProducts[line.productId];
-                if (!product) return null;
+              {items.map((line: any) => {
+                const sample = sampleProducts[line.productId];
+                const title = line.productTitle || sample?.title || `منتج #${line.productId}`;
+                const variantName = line.variantTitle || line.variantName;
                 const hasPrinting = Boolean(line.artworkAssetId || line.printingNotes);
-                const printingCost = hasPrinting ? (product.customizationFee || 0) * line.quantity : 0;
-                const lineTotal = product.basePrice * line.quantity + printingCost;
+                const printingCost =
+                  line.lineCustomizationFee ??
+                  (hasPrinting ? (sample?.customizationFee || 0) * line.quantity : 0);
+                const lineTotal =
+                  line.lineTotal ??
+                  ((sample?.basePrice || 0) * line.quantity + printingCost);
 
                 return (
                   <div
@@ -555,11 +560,11 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                     }}
                   >
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, color: 'var(--brand-primary-dark)' }}>
-                      <span>{product.title}</span>
+                      <span>{title}</span>
                       <span>{lineTotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
                     </div>
                     <div style={{ color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                      {line.quantity} {isArabic ? 'قطع' : 'units'} {line.variantName ? `• ${line.variantName}` : ''}
+                      {line.quantity} {isArabic ? 'قطع' : 'units'} {variantName ? `• ${variantName}` : ''}
                     </div>
                     {hasPrinting && (
                       <div style={{ color: 'var(--brand-primary)', marginTop: '0.15rem' }}>

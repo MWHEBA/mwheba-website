@@ -185,12 +185,17 @@ export function CartDrawer({ locale }: CartDrawerProps) {
             </div>
           ) : (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {items.map((line) => {
-                const product = sampleProducts[line.productId];
-                if (!product) return null;
+              {items.map((line: any) => {
+                const sample = sampleProducts[line.productId];
+                const title = line.productTitle || sample?.title || `منتج #${line.productId}`;
+                const variantName = line.variantTitle || line.variantName;
                 const hasPrinting = Boolean(line.artworkAssetId || line.printingNotes);
-                const printingFeeTotal = hasPrinting ? (product.customizationFee || 0) * line.quantity : 0;
-                const lineTotal = product.basePrice * line.quantity + printingFeeTotal;
+                const printingFeeTotal =
+                  line.lineCustomizationFee ??
+                  (hasPrinting ? (sample?.customizationFee || 0) * line.quantity : 0);
+                const lineTotal =
+                  line.lineTotal ??
+                  ((sample?.basePrice || 0) * line.quantity + printingFeeTotal);
 
                 return (
                   <li
@@ -205,11 +210,11 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
                         <h4 style={{ margin: '0 0 0.25rem', fontSize: '0.9375rem', fontWeight: 700, color: 'var(--brand-primary-dark)' }}>
-                          {product.title}
+                          {title}
                         </h4>
-                        {line.variantName && (
+                        {variantName && (
                           <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                            {isArabic ? 'الخيار:' : 'Variant:'} {line.variantName}
+                            {isArabic ? 'الخيار:' : 'Variant:'} {variantName}
                           </div>
                         )}
                       </div>

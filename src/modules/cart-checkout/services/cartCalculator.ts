@@ -211,7 +211,7 @@ export async function hydrateCartLines(
     const lineTotal = lineSubtotal + lineCustomizationFee;
 
     hydratedItems.push({
-      id: String(raw.id || `line-${prodId}-${varId || 0}-${Date.now()}`),
+      id: String(raw.id || `line-${prodId}-${varId || 0}`),
       productId: prodId,
       productTitle: String(product.title || 'Product'),
       productSlug: String(product.slug || ''),

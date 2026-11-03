@@ -26,6 +26,11 @@ import {
 } from '../src/app/api/cart/items/route';
 import { signCartId } from '../src/modules/cart-checkout/logic/cartSession';
 import { NextRequest } from 'next/server';
+import React from 'react';
+import { renderToString } from 'react-dom/server';
+import { sql } from '@payloadcms/db-postgres';
+import { CartProvider, useCart } from '../src/modules/cart-checkout/context/CartContext';
+import { up as runPreserveGuestSecretsMigration } from '../src/migrations/20261103_170000_preserve_guest_secrets_and_schema';
 
 describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () => {
   let payload: Payload;
@@ -760,6 +765,254 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const clearKey = generateOperationKey('clear');
       summary = await clearPersistentCart(payload, cart.id, clearKey);
       expect(summary.items.length).toBe(0);
+    });
+  });
+
+  describe('10. Cart UI & Context Integration via Persistent API with Retry', () => {
+    it('initializes with clean empty state and no pre-seeded mock items', () => {
+      function TestCartView() {
+        const { items, rawItems, calculation, isCartOpen, totalCount } = useCart();
+        return React.createElement(
+          'div',
+          { 'data-testid': 'cart-container' },
+          React.createElement('span', { 'data-testid': 'items-count' }, String(items.length)),
+          React.createElement('span', { 'data-testid': 'raw-count' }, String(rawItems.length)),
+          React.createElement('span', { 'data-testid': 'is-open' }, String(isCartOpen)),
+          React.createElement('span', { 'data-testid': 'total-count' }, String(totalCount)),
+          React.createElement('span', { 'data-testid': 'subtotal' }, String(calculation.subtotal))
+        );
+      }
+
+      const html = renderToString(
+        React.createElement(CartProvider, null, React.createElement(TestCartView, null))
+      );
+
+      // Must strictly be empty on initialization
+      expect(html).toContain('data-testid="items-count">0</span>');
+      expect(html).toContain('data-testid="raw-count">0</span>');
+      expect(html).toContain('data-testid="total-count">0</span>');
+      expect(html).toContain('data-testid="subtotal">0</span>');
+      // Must NOT contain any hardcoded mock identifiers from previous prototype
+      expect(html).not.toContain('initial-line-1');
+      expect(html).not.toContain('mock-logo-01');
+      expect(html).not.toContain('flask-01');
+    });
+
+    it('drives cart mutation via executeWithOperationRetry over persistent API endpoints', async () => {
+      const cart = await getOrCreateCart(payload);
+      createdCartIds.push(cart.id);
+
+      const signedCookie = signCartId(cart.id);
+      const cookieHeader = `mwheba_cart=${signedCookie}`;
+
+      // 1. Add item using executeWithOperationRetry
+      let attemptsCount = 0;
+      let usedOpKey = '';
+
+      const addResponse = await executeWithOperationRetry(async (opKey) => {
+        attemptsCount++;
+        usedOpKey = opKey;
+
+        const req = new NextRequest('http://localhost:3000/api/cart/items', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: cookieHeader,
+          },
+          body: JSON.stringify({
+            productId: physicalProductA.id,
+            quantity: 10,
+            artworkAssetId: 'art-cust-test-01',
+            printingNotes: 'طباعة شعار الشركة بدقة ليزر',
+            operationKey: opKey,
+          }),
+        });
+
+        const res = await cartItemsPostRoute(req);
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(`POST failed (${res.status}): ${JSON.stringify(err)}`);
+        }
+        return res.json();
+      }, 'add');
+
+      expect(attemptsCount).toBe(1);
+      expect(usedOpKey).toMatch(/^op_add_/);
+      expect(addResponse.success).toBe(true);
+      expect(addResponse.summary.totalItemsCount).toBe(10);
+      expect(addResponse.summary.items.length).toBe(1);
+      const addedItemId = addResponse.summary.items[0].id;
+
+      // 2. Simulate transient network glitch triggering executeWithOperationRetry
+      let retryAttempts = 0;
+      const capturedKeys: string[] = [];
+
+      const patchResponse = await executeWithOperationRetry(
+        async (opKey) => {
+          retryAttempts++;
+          capturedKeys.push(opKey);
+
+          if (retryAttempts === 1) {
+            // First attempt hits the server, but client drops connection before parsing response
+            const req = new NextRequest('http://localhost:3000/api/cart/items', {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                Cookie: cookieHeader,
+              },
+              body: JSON.stringify({
+                itemId: addedItemId,
+                quantity: 15,
+                operationKey: opKey,
+              }),
+            });
+            await cartItemsPatchRoute(req);
+            // Simulate client-side network drop
+            const netErr: any = new Error('fetch failed: network connection interrupted');
+            netErr.name = 'TypeError';
+            throw netErr;
+          }
+
+          // Second attempt re-dispatches with the EXACT same opKey
+          const req2 = new NextRequest('http://localhost:3000/api/cart/items', {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Cookie: cookieHeader,
+            },
+            body: JSON.stringify({
+              itemId: addedItemId,
+              quantity: 15,
+              operationKey: opKey,
+            }),
+          });
+          const res2 = await cartItemsPatchRoute(req2);
+          if (!res2.ok) {
+            const err = await res2.json();
+            throw new Error(`PATCH res2 failed (${res2.status}): ${JSON.stringify(err)}`);
+          }
+          return res2.json();
+        },
+        'update',
+        { maxRetries: 3, initialDelayMs: 10 }
+      );
+
+      expect(retryAttempts).toBe(2);
+      // Both attempts MUST have reused the identical operationKey
+      expect(capturedKeys[0]).toBe(capturedKeys[1]);
+      expect(patchResponse.summary.totalItemsCount).toBe(15);
+      expect(patchResponse.summary.items[0].quantity).toBe(15);
+
+      // Verify persistent PostgreSQL state directly
+      const dbCart = await payload.findByID({
+        collection: 'carts',
+        id: cart.id,
+        depth: 0,
+      });
+      expect(dbCart.items?.[0].quantity).toBe(15);
+      expect(dbCart.appliedOperations).toContain(capturedKeys[0]);
+
+      // 3. Remove line item via DELETE /api/cart/items
+      const deleteResponse = await executeWithOperationRetry(async (opKey) => {
+        const req = new NextRequest('http://localhost:3000/api/cart/items', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: cookieHeader,
+          },
+          body: JSON.stringify({
+            itemId: addedItemId,
+            operationKey: opKey,
+          }),
+        });
+        const res = await cartItemsDeleteRoute(req);
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(`DELETE failed (${res.status}): ${JSON.stringify(err)}`);
+        }
+        return res.json();
+      }, 'remove');
+
+      expect(deleteResponse.success).toBe(true);
+      expect(deleteResponse.summary.totalItemsCount).toBe(0);
+      expect(deleteResponse.summary.items.length).toBe(0);
+    });
+  });
+
+  describe('11. Migration Upgrade & Guest Secret Non-Destructive Preservation', () => {
+    it('preserves legacy guest access when upgrading existing carts with JSON secrets', async () => {
+      const db = (payload.db as any).drizzle;
+      const legacyOpKey = `op_legacy_upg_${Date.now()}`;
+      const legacySecretPayload = JSON.stringify({
+        lastOpKey: legacyOpKey,
+        appliedOps: [legacyOpKey, 'op_earlier_operation_456'],
+      });
+
+      // 1. Insert pre-existing cart with a JSON secret (simulating pre-migration state)
+      const insertResult = await db.execute(sql`
+        INSERT INTO "carts" ("secret", "currency", "subtotal", "created_at", "updated_at")
+        VALUES (${legacySecretPayload}, 'EGP', 0, now(), now())
+        RETURNING id, secret;
+      `);
+      const legacyCartId = insertResult.rows[0].id;
+      createdCartIds.push(legacyCartId);
+
+      // 2. Run the migration upgrade logic from 20261103_170000_preserve_guest_secrets_and_schema
+      await runPreserveGuestSecretsMigration({ db, payload } as any);
+
+      // 3. Verify PostgreSQL applied_operations extracted the operations safely without data loss
+      const checkCart = await db.execute(sql`
+        SELECT id, secret, applied_operations FROM "carts" WHERE id = ${legacyCartId};
+      `);
+      const upgradedCart = checkCart.rows[0];
+      expect(upgradedCart).toBeDefined();
+
+      const ops = upgradedCart.applied_operations;
+      const opsArray = Array.isArray(ops) ? ops : JSON.parse(ops || '[]');
+      expect(opsArray).toContain(legacyOpKey);
+      expect(opsArray).toContain('op_earlier_operation_456');
+
+      // 4. Verify guest is NOT locked out when requesting via GET /api/cart/items with full legacy secret
+      const reqWithJsonSecret = new NextRequest(
+        `http://localhost:3000/api/cart/items?secret=${encodeURIComponent(legacySecretPayload)}`,
+        { method: 'GET' }
+      );
+      const resWithJsonSecret = await cartItemsGetRoute(reqWithJsonSecret);
+      expect(resWithJsonSecret.ok).toBe(true);
+      const dataWithJsonSecret = await resWithJsonSecret.json();
+      expect(dataWithJsonSecret.cartId).toBe(legacyCartId);
+
+      // 5. Verify guest is NOT locked out when requesting via opKey identifier
+      const reqWithOpKey = new NextRequest(
+        `http://localhost:3000/api/cart/items?secret=${legacyOpKey}`,
+        { method: 'GET' }
+      );
+      const resWithOpKey = await cartItemsGetRoute(reqWithOpKey);
+      expect(resWithOpKey.ok).toBe(true);
+      const dataWithOpKey = await resWithOpKey.json();
+      expect(dataWithOpKey.cartId).toBe(legacyCartId);
+
+      // 6. Verify that standard hex guest secrets remain 100% untouched and functional
+      const standardHexSecret = 'a1b2c3d4e5f67890123456789012345678901234';
+      const hexInsertResult = await db.execute(sql`
+        INSERT INTO "carts" ("secret", "currency", "subtotal", "created_at", "updated_at")
+        VALUES (${standardHexSecret}, 'EGP', 0, now(), now())
+        RETURNING id, secret;
+      `);
+      const hexCartId = hexInsertResult.rows[0].id;
+      createdCartIds.push(hexCartId);
+
+      // Run migration again to prove idempotent stability
+      await runPreserveGuestSecretsMigration({ db, payload } as any);
+
+      const reqWithHexSecret = new NextRequest(
+        `http://localhost:3000/api/cart/items?secret=${standardHexSecret}`,
+        { method: 'GET' }
+      );
+      const resWithHexSecret = await cartItemsGetRoute(reqWithHexSecret);
+      expect(resWithHexSecret.ok).toBe(true);
+      const dataWithHexSecret = await resWithHexSecret.json();
+      expect(dataWithHexSecret.cartId).toBe(hexCartId);
     });
   });
 });

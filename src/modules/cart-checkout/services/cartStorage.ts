@@ -9,8 +9,8 @@ import {
 export const CART_COOKIE_NAME = 'mwheba_cart';
 
 export interface CartMutationItem {
-  productId: number;
-  variantId?: number;
+  productId: number | string;
+  variantId?: number | string;
   quantity: number;
   artworkAssetId?: string;
   printingNotes?: string;
@@ -42,6 +42,17 @@ export function parseAppliedOperations(field: any): string[] {
 export function appendAppliedOperation(newOpKey: string, existingOpsField: any): string[] {
   const existing = parseAppliedOperations(existingOpsField);
   return [newOpKey, ...existing.filter((k) => k !== newOpKey)].slice(0, 50);
+}
+
+export function matchesCartItem(it: any, idx: number, itemId: string): boolean {
+  if (it.id && String(it.id) === String(itemId)) return true;
+  if (String(idx) === String(itemId)) return true;
+  const itProdId = typeof it.product === 'object' && it.product !== null ? it.product.id : it.product;
+  const itVarId = typeof it.variant === 'object' && it.variant !== null ? it.variant.id : it.variant;
+  if (String(itProdId) === String(itemId)) return true;
+  if (`line-${itProdId}-${itVarId || 0}` === String(itemId) || `line_${itProdId}_${itVarId || 0}` === String(itemId)) return true;
+  if (typeof itemId === 'string' && itemId.startsWith(`line-${itProdId}-${itVarId || 0}`)) return true;
+  return false;
 }
 
 const inProcessLocks = new Map<number, Promise<void>>();
@@ -230,22 +241,45 @@ export async function addItemToCart(
   cartId: number,
   item: CartMutationItem
 ): Promise<CartCalculationSummary> {
-  if (!Number.isSafeInteger(item.productId) || item.productId <= 0) {
-    throw new Error('INVALID_PRODUCT_ID: Valid positive integer productId is required.');
-  }
   const qty = Number(item.quantity);
   if (!Number.isSafeInteger(qty) || qty <= 0) {
     throw new Error('INVALID_QUANTITY: Quantity must be a positive whole integer.');
   }
 
-  // Validate product exists and is published
-  const product = await payload.findByID({
-    collection: 'products',
-    id: item.productId,
-    depth: 0,
-  });
+  let numericProductId = Number(item.productId);
+  let product: any = null;
+
+  if (Number.isSafeInteger(numericProductId) && numericProductId > 0) {
+    product = await payload.findByID({
+      collection: 'products',
+      id: numericProductId,
+      depth: 0,
+    });
+  }
+
+  if (!product && typeof item.productId === 'string' && item.productId.trim()) {
+    const found = await payload.find({
+      collection: 'products',
+      where: { slug: { equals: item.productId.trim() } },
+      limit: 1,
+      depth: 0,
+    });
+    if (found.docs?.[0]) {
+      product = found.docs[0];
+      numericProductId = product.id;
+    }
+  }
+
   if (!product || product._status !== 'published') {
     throw new Error(`PRODUCT_UNAVAILABLE: Product ${item.productId} is not available.`);
+  }
+
+  let numericVariantId: number | undefined = undefined;
+  if (item.variantId !== undefined && item.variantId !== null) {
+    const parsedVar = Number(item.variantId);
+    if (Number.isSafeInteger(parsedVar) && parsedVar > 0) {
+      numericVariantId = parsedVar;
+    }
   }
 
   // Validate variant if provided
@@ -303,8 +337,8 @@ export async function addItemToCart(
           : existing.variant;
 
       return (
-        Number(existingProdId) === Number(item.productId) &&
-        Number(existingVarId || 0) === Number(item.variantId || 0) &&
+        Number(existingProdId) === numericProductId &&
+        Number(existingVarId || 0) === Number(numericVariantId || 0) &&
         String(existing.artworkAssetId || '') === String(item.artworkAssetId || '') &&
         String(existing.printingNotes || '') === String(item.printingNotes || '')
       );
@@ -316,9 +350,11 @@ export async function addItemToCart(
         quantity: Number(items[existingIndex].quantity) + qty,
       };
     } else {
+      const lineId = `line_${numericProductId}_${numericVariantId || 0}_${Date.now()}`;
       items.push({
-        product: item.productId,
-        variant: item.variantId || undefined,
+        id: lineId,
+        product: numericProductId,
+        variant: numericVariantId || undefined,
         quantity: qty,
         artworkAssetId: item.artworkAssetId || undefined,
         printingNotes: item.printingNotes || undefined,
@@ -386,9 +422,9 @@ export async function updateItemQuantity(
     let items = [...(cart.items || [])];
 
     if (qty === 0) {
-      items = items.filter((it: any) => String(it.id) !== String(itemId));
+      items = items.filter((it: any, idx: number) => !matchesCartItem(it, idx, itemId));
     } else {
-      const targetIndex = items.findIndex((it: any) => String(it.id) === String(itemId));
+      const targetIndex = items.findIndex((it: any, idx: number) => matchesCartItem(it, idx, itemId));
       if (targetIndex === -1) {
         throw new Error(`CART_ITEM_NOT_FOUND: Line item ${itemId} not found in cart.`);
       }
@@ -448,7 +484,7 @@ export async function removeItemFromCart(
       return calculateCartSummary(hydrated);
     }
 
-    const items = (cart.items || []).filter((it: any) => String(it.id) !== String(itemId));
+    const items = (cart.items || []).filter((it: any, idx: number) => !matchesCartItem(it, idx, itemId));
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
 

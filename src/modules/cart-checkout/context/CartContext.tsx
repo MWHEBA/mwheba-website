@@ -1,158 +1,407 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useMemo, type ReactNode } from 'react';
-import {
-  type CartLineItem,
-  type CartCalculationResult,
-  calculateCartState,
+import React, {
+  createContext,
+  useContext,
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  type ReactNode,
+} from 'react';
+import type {
+  HydratedCartItem,
+  CartCalculationSummary,
+} from '@/modules/cart-checkout/services/cartCalculator';
+import type {
+  CartLineItem,
+  CartCalculationResult,
+  ProductMoqStatus,
 } from '@/modules/cart-checkout/logic/moqEngine';
-import { sampleProducts } from '@/modules/catalog/data/sampleProducts';
+import { executeWithOperationRetry } from '@/modules/cart-checkout/logic/idempotency';
 
-interface CartContextValue {
-  items: CartLineItem[];
+export interface AddItemInput {
+  productId: string | number;
+  variantId?: string | number;
+  variantName?: string;
+  quantity: number;
+  artworkAssetId?: string;
+  printingNotes?: string;
+}
+
+export interface CartContextValue {
+  cartId: number | null;
+  items: HydratedCartItem[];
+  rawItems: CartLineItem[];
   calculation: CartCalculationResult;
+  summary: CartCalculationSummary | null;
+  isLoading: boolean;
   isCartOpen: boolean;
   totalCount: number;
   shippingFee: number;
+  error: string | null;
   openCart: () => void;
   closeCart: () => void;
   toggleCart: () => void;
-  addItem: (item: Omit<CartLineItem, 'id'>) => void;
-  updateQuantity: (id: string, delta: number) => void;
-  setQuantity: (id: string, quantity: number) => void;
-  removeItem: (id: string) => void;
-  clearCart: () => void;
+  refreshCart: () => Promise<void>;
+  addItem: (item: AddItemInput) => Promise<void>;
+  updateQuantity: (id: string, delta: number) => Promise<void>;
+  setQuantity: (id: string, quantity: number) => Promise<void>;
+  removeItem: (id: string) => Promise<void>;
+  clearCart: () => Promise<void>;
   setShippingFee: (fee: number) => void;
 }
 
 const CartContext = createContext<CartContextValue | null>(null);
 
-const STORAGE_KEY = 'mwheba_cart_v2';
-
 export function CartProvider({ children }: { children: ReactNode }) {
-  // Pre-seed with one sample item for immediate realistic demonstration
-  const [items, setItems] = useState<CartLineItem[]>([
-    {
-      id: 'initial-line-1',
-      productId: 'flask-01',
-      variantId: 'v-blue',
-      variantName: 'أزرق بترولي مؤسسي',
-      quantity: 10,
-      artworkAssetId: 'mock-logo-01',
-      printingNotes: 'حفر ليزر دقيق على الوجهين للشعار الرسمي',
-    },
-  ]);
-
+  const [cartId, setCartId] = useState<number | null>(null);
+  const [items, setItems] = useState<HydratedCartItem[]>([]);
+  const [summary, setSummary] = useState<CartCalculationSummary | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [shippingFee, setShippingFee] = useState(0); // 0 for pickup, 150 for courier
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [shippingFee, setShippingFee] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  // Restore from sessionStorage on mount
-  useEffect(() => {
+  /**
+   * Refreshes the cart state from PostgreSQL via /api/cart/items.
+   */
+  const refreshCart = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
     try {
-      const saved = sessionStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setItems(parsed);
+      const res = await fetch('/api/cart/items', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.cartId) {
+          setCartId(data.cartId);
+        }
+        if (data.summary) {
+          setSummary(data.summary);
+          setItems(data.summary.items || []);
+        } else if (data.items) {
+          setItems(data.items);
         }
       }
-    } catch {
-      // Ignore storage errors
+    } catch (err: any) {
+      setError(err?.message || 'Failed to load cart');
     } finally {
-      setIsLoaded(true);
+      setIsLoading(false);
     }
   }, []);
 
-  // Save to sessionStorage
+  // Fetch persistent cart on initial mount
   useEffect(() => {
-    if (!isLoaded) return;
+    refreshCart();
+  }, [refreshCart]);
+
+  /**
+   * Adds an item to the persistent PostgreSQL cart with retry & idempotency.
+   */
+  const addItem = useCallback(
+    async (item: AddItemInput) => {
+      setError(null);
+      setIsLoading(true);
+      try {
+        await executeWithOperationRetry(
+          async (operationKey) => {
+            const res = await fetch('/api/cart/items', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                productId: item.productId,
+                variantId: item.variantId,
+                quantity: item.quantity,
+                artworkAssetId: item.artworkAssetId,
+                printingNotes: item.printingNotes,
+                operationKey,
+              }),
+            });
+
+            if (!res.ok) {
+              const errBody = await res.json().catch(() => ({}));
+              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            if (data.cartId) setCartId(data.cartId);
+            if (data.summary) {
+              setSummary(data.summary);
+              setItems(data.summary.items || []);
+            }
+            return data;
+          },
+          'add'
+        );
+        setIsCartOpen(true);
+      } catch (err: any) {
+        setError(err.message || 'Failed to add item to cart');
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    []
+  );
+
+  /**
+   * Updates quantity by delta with idempotent retry.
+   */
+  const updateQuantity = useCallback(
+    async (id: string, delta: number) => {
+      const targetItem = items.find((it) => it.id === id);
+      if (!targetItem) return;
+      const nextQuantity = targetItem.quantity + delta;
+
+      setError(null);
+      setIsLoading(true);
+      try {
+        await executeWithOperationRetry(
+          async (operationKey) => {
+            let res: Response;
+            if (nextQuantity <= 0) {
+              res = await fetch('/api/cart/items', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ itemId: id, operationKey }),
+              });
+            } else {
+              res = await fetch('/api/cart/items', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ itemId: id, quantity: nextQuantity, operationKey }),
+              });
+            }
+
+            if (!res.ok) {
+              const errBody = await res.json().catch(() => ({}));
+              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            if (data.summary) {
+              setSummary(data.summary);
+              setItems(data.summary.items || []);
+            }
+            return data;
+          },
+          'update'
+        );
+      } catch (err: any) {
+        setError(err.message || 'Failed to update quantity');
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [items]
+  );
+
+  /**
+   * Sets absolute quantity with idempotent retry.
+   */
+  const setQuantity = useCallback(
+    async (id: string, quantity: number) => {
+      const validQty = Math.max(0, quantity);
+      const targetItem = items.find((it) => it.id === id);
+      if (!targetItem) return;
+
+      setError(null);
+      setIsLoading(true);
+      try {
+        await executeWithOperationRetry(
+          async (operationKey) => {
+            let res: Response;
+            if (validQty === 0) {
+              res = await fetch('/api/cart/items', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ itemId: id, operationKey }),
+              });
+            } else {
+              res = await fetch('/api/cart/items', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ itemId: id, quantity: validQty, operationKey }),
+              });
+            }
+
+            if (!res.ok) {
+              const errBody = await res.json().catch(() => ({}));
+              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            if (data.summary) {
+              setSummary(data.summary);
+              setItems(data.summary.items || []);
+            }
+            return data;
+          },
+          'update'
+        );
+      } catch (err: any) {
+        setError(err.message || 'Failed to set quantity');
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [items]
+  );
+
+  /**
+   * Removes a line item with idempotent retry.
+   */
+  const removeItem = useCallback(async (id: string) => {
+    setError(null);
+    setIsLoading(true);
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(items));
-    } catch {
-      // Ignore
+      await executeWithOperationRetry(
+        async (operationKey) => {
+          const res = await fetch('/api/cart/items', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ itemId: id, operationKey }),
+          });
+
+          if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
+          }
+
+          const data = await res.json();
+          if (data.summary) {
+            setSummary(data.summary);
+            setItems(data.summary.items || []);
+          }
+          return data;
+        },
+        'remove'
+      );
+    } catch (err: any) {
+      setError(err.message || 'Failed to remove item');
+      throw err;
+    } finally {
+      setIsLoading(false);
     }
-  }, [items, isLoaded]);
+  }, []);
 
-  // Reactive calculations using moqEngine
-  const calculation = useMemo(() => {
-    return calculateCartState(items, sampleProducts, shippingFee);
-  }, [items, shippingFee]);
+  /**
+   * Clears the persistent cart completely with idempotent retry.
+   */
+  const clearCart = useCallback(async () => {
+    setError(null);
+    setIsLoading(true);
+    try {
+      await executeWithOperationRetry(
+        async (operationKey) => {
+          const res = await fetch('/api/cart/items', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ clearAll: true, operationKey }),
+          });
 
-  const totalCount = useMemo(() => {
-    return items.reduce((acc, curr) => acc + curr.quantity, 0);
+          if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
+          }
+
+          const data = await res.json();
+          if (data.summary) {
+            setSummary(data.summary);
+            setItems(data.summary.items || []);
+          } else {
+            setItems([]);
+          }
+          return data;
+        },
+        'clear'
+      );
+    } catch (err: any) {
+      setError(err.message || 'Failed to clear cart');
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Map hydrated server items to lightweight CartLineItem format
+  const rawItems: CartLineItem[] = useMemo(() => {
+    return items.map((it) => ({
+      id: it.id,
+      productId: String(it.productId),
+      variantId: it.variantId ? String(it.variantId) : undefined,
+      variantName: it.variantTitle,
+      quantity: it.quantity,
+      artworkAssetId: it.artworkAssetId,
+      printingNotes: it.printingNotes,
+    }));
   }, [items]);
 
-  const openCart = () => setIsCartOpen(true);
-  const closeCart = () => setIsCartOpen(false);
-  const toggleCart = () => setIsCartOpen((prev) => !prev);
-
-  const addItem = (item: Omit<CartLineItem, 'id'>) => {
-    setItems((prev) => {
-      // Check if identical item already exists (same product, variant, and notes)
-      const existingIdx = prev.findIndex(
-        (p) =>
-          p.productId === item.productId &&
-          p.variantId === item.variantId &&
-          p.artworkAssetId === item.artworkAssetId &&
-          p.printingNotes === item.printingNotes
-      );
-
-      if (existingIdx >= 0) {
-        const updated = [...prev];
-        updated[existingIdx] = {
-          ...updated[existingIdx],
-          quantity: updated[existingIdx].quantity + item.quantity,
-        };
-        return updated;
-      }
-
-      const newLine: CartLineItem = {
-        ...item,
-        id: `cart-line-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  // Reactive calculation result matching moqEngine structure for UI components
+  const calculation: CartCalculationResult = useMemo(() => {
+    if (!summary) {
+      return {
+        items: rawItems,
+        productStatuses: {},
+        subtotal: 0,
+        totalCustomizationFees: 0,
+        grandTotal: shippingFee,
+        canCheckout: false,
+        validationErrors: [],
       };
-      return [...prev, newLine];
-    });
+    }
 
-    setIsCartOpen(true);
-  };
+    const productStatuses: Record<string, ProductMoqStatus> = {};
+    for (const [pId, grp] of Object.entries(summary.productGroupings || {})) {
+      productStatuses[pId] = {
+        productId: String(grp.productId),
+        productTitle: grp.productTitle,
+        totalQuantity: grp.totalQuantity,
+        minOrderQuantity: grp.minOrderQuantity,
+        isSatisfied: grp.isSatisfied,
+        remainingNeeded: grp.remainingNeeded,
+      };
+    }
 
-  const updateQuantity = (id: string, delta: number) => {
-    setItems((prev) =>
-      prev
-        .map((item) => {
-          if (item.id !== id) return item;
-          const nextQty = Math.max(1, item.quantity + delta);
-          return { ...item, quantity: nextQty };
-        })
-        .filter((item) => item.quantity > 0)
-    );
-  };
+    return {
+      items: rawItems,
+      productStatuses,
+      subtotal: summary.subtotal,
+      totalCustomizationFees: summary.totalCustomizationFees,
+      grandTotal: summary.grandTotal + shippingFee,
+      canCheckout: summary.canCheckout,
+      validationErrors: summary.validationErrors,
+    };
+  }, [summary, rawItems, shippingFee]);
 
-  const setQuantity = (id: string, quantity: number) => {
-    const validQty = Math.max(1, quantity);
-    setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, quantity: validQty } : item))
-    );
-  };
+  const totalCount = useMemo(() => {
+    return summary?.totalItemsCount ?? items.reduce((acc, curr) => acc + curr.quantity, 0);
+  }, [summary, items]);
 
-  const removeItem = (id: string) => {
-    setItems((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const clearCart = () => {
-    setItems([]);
-  };
+  const openCart = useCallback(() => setIsCartOpen(true), []);
+  const closeCart = useCallback(() => setIsCartOpen(false), []);
+  const toggleCart = useCallback(() => setIsCartOpen((prev) => !prev), []);
 
   const value: CartContextValue = {
+    cartId,
     items,
+    rawItems,
     calculation,
+    summary,
+    isLoading,
     isCartOpen,
     totalCount,
     shippingFee,
+    error,
     openCart,
     closeCart,
     toggleCart,
+    refreshCart,
     addItem,
     updateQuantity,
     setQuantity,
