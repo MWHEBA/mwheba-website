@@ -1,4 +1,5 @@
 import type { Payload } from 'payload';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   calculateCartSummary,
   hydrateCartLines,
@@ -13,21 +14,76 @@ export interface CartMutationItem {
   quantity: number;
   artworkAssetId?: string;
   printingNotes?: string;
+  operationKey?: string;
+}
+
+export interface CartLockContext {
+  readonly hasSaved: boolean;
+  markSaved: () => void;
+}
+
+interface CartMetadata {
+  lastOpKey?: string;
+  appliedOps?: string[];
+}
+
+export function parseCartMetadata(secret?: string | null): CartMetadata {
+  if (!secret) return {};
+  try {
+    const parsed = JSON.parse(secret);
+    if (parsed && typeof parsed === 'object') {
+      return {
+        lastOpKey: parsed.lastOpKey,
+        appliedOps: Array.isArray(parsed.appliedOps) ? parsed.appliedOps : [],
+      };
+    }
+  } catch {
+    // Secret was plain string
+    return { lastOpKey: secret, appliedOps: [secret] };
+  }
+  return {};
+}
+
+export function serializeCartMetadata(newOpKey: string, existingSecret?: string | null): string {
+  const meta = parseCartMetadata(existingSecret);
+  const applied = [newOpKey, ...(meta.appliedOps || []).filter((k) => k !== newOpKey)].slice(0, 50);
+  return JSON.stringify({
+    lastOpKey: newOpKey,
+    appliedOps: applied,
+  });
 }
 
 const inProcessLocks = new Map<number, Promise<void>>();
+const asyncLockStorage = new AsyncLocalStorage<Set<number>>();
 
 /**
  * Execute a mutation on a cart with a PostgreSQL advisory lock (cross-process)
- * and in-process queue serialization per cartId, with automatic retry.
+ * and in-process queue serialization per cartId, with safe idempotency-aware retry.
+ * Supports reentrancy across nested calls in the same async execution context.
+ *
+ * CRITICAL IDEMPOTENCY INVARIANT:
+ * Retries are STRICTLY PERMITTED only when we can prove that the mutation has NOT been saved (hasSaved === false).
+ * If the database update succeeded and an interruption/error occurs afterwards,
+ * we never re-execute the mutation to prevent duplicate increments or double-charges.
  */
 export async function withCartLock<T>(
   payload: Payload,
   cartId: number,
-  mutator: () => Promise<T>,
+  mutator: (context: CartLockContext) => Promise<T>,
   maxRetries: number = 3
 ): Promise<T> {
-  // 1. In-process serialization per cartId within this process
+  const activeLocks = asyncLockStorage.getStore();
+
+  // Reentrancy check: If the current async call-chain already holds this cart's lock, execute directly
+  if (activeLocks && activeLocks.has(cartId)) {
+    const dummyContext: CartLockContext = {
+      hasSaved: false,
+      markSaved() {},
+    };
+    return mutator(dummyContext);
+  }
+
+  // 1. In-process serialization per cartId across distinct callers within this process
   while (inProcessLocks.has(cartId)) {
     try {
       await inProcessLocks.get(cartId);
@@ -51,6 +107,17 @@ export async function withCartLock<T>(
     }
 
     let lastError: any;
+    let hasSaved = false;
+
+    const lockContext: CartLockContext = {
+      get hasSaved() {
+        return hasSaved;
+      },
+      markSaved() {
+        hasSaved = true;
+      },
+    };
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       let client: any = null;
       let lockAcquired = false;
@@ -61,10 +128,26 @@ export async function withCartLock<T>(
         await client.query('SELECT pg_advisory_lock($1)', [cartId]);
         lockAcquired = true;
 
-        const result = await mutator();
+        const currentActive = activeLocks ? new Set(activeLocks) : new Set<number>();
+        currentActive.add(cartId);
+
+        const result = await asyncLockStorage.run(currentActive, () => mutator(lockContext));
         return result;
       } catch (err: any) {
         lastError = err;
+
+        // RETRY SAFETY: If mutation was ALREADY SAVED to database, do NOT re-execute mutator!
+        // Instead, safely recover and return the latest persisted state directly from DB.
+        if (hasSaved) {
+          try {
+            const summary = await getCartSummary(payload, cartId);
+            return summary as unknown as T;
+          } catch {
+            throw err;
+          }
+        }
+
+        // Only retry if we can PROVE the mutation was NOT saved (hasSaved === false)
         const isRetryable =
           err.code === '40001' || // serialization_failure
           err.code === '40P01' || // deadlock_detected
@@ -149,6 +232,7 @@ export async function getOrCreateCart(
  * Permissively adds an item to the persistent cart in PostgreSQL.
  * If identical line (same product, variant, artwork, notes) exists, increments quantity.
  * Allows incomplete quantities (e.g. 5 units) while calculating remaining MOQ needed.
+ * Strictly idempotent when provided an operationKey.
  */
 export async function addItemToCart(
   payload: Payload,
@@ -194,12 +278,24 @@ export async function addItemToCart(
     }
   }
 
-  return withCartLock(payload, cartId, async () => {
+  const opKey =
+    item.operationKey ||
+    `op_add_${item.productId}_${item.variantId || 0}_${item.quantity}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
       collection: 'carts',
       id: cartId,
       depth: 0,
     });
+
+    const meta = parseCartMetadata(cart.secret);
+    // IDEMPOTENCY GUARD: If operationKey was already applied, do NOT add again!
+    if (opKey && meta.appliedOps?.includes(opKey)) {
+      lockContext.markSaved();
+      const hydrated = await hydrateCartLines(cart.items || [], payload);
+      return calculateCartSummary(hydrated);
+    }
 
     const items = [...(cart.items || [])];
 
@@ -241,15 +337,21 @@ export async function addItemToCart(
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
 
+    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+
     await payload.update({
       collection: 'carts',
       id: cartId,
       data: {
         items,
         subtotal: summary.subtotal,
+        secret: updatedSecret,
       },
       depth: 0,
     });
+
+    // Mark as successfully saved in DB before completing
+    lockContext.markSaved();
 
     return summary;
   });
@@ -262,24 +364,35 @@ export async function updateItemQuantity(
   payload: Payload,
   cartId: number,
   itemId: string,
-  newQuantity: number
+  newQuantity: number,
+  operationKey?: string
 ): Promise<CartCalculationSummary> {
   const qty = Number(newQuantity);
   if (!Number.isSafeInteger(qty) || qty < 0) {
     throw new Error('INVALID_QUANTITY: Quantity must be a non-negative whole integer.');
   }
 
-  return withCartLock(payload, cartId, async () => {
+  const opKey =
+    operationKey ||
+    `op_qty_${itemId}_${qty}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
       collection: 'carts',
       id: cartId,
       depth: 0,
     });
 
+    const meta = parseCartMetadata(cart.secret);
+    if (opKey && meta.appliedOps?.includes(opKey)) {
+      lockContext.markSaved();
+      const hydrated = await hydrateCartLines(cart.items || [], payload);
+      return calculateCartSummary(hydrated);
+    }
+
     let items = [...(cart.items || [])];
 
     if (qty === 0) {
-      // Remove item
       items = items.filter((it: any) => String(it.id) !== String(itemId));
     } else {
       const targetIndex = items.findIndex((it: any) => String(it.id) === String(itemId));
@@ -295,15 +408,20 @@ export async function updateItemQuantity(
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
 
+    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+
     await payload.update({
       collection: 'carts',
       id: cartId,
       data: {
         items,
         subtotal: summary.subtotal,
+        secret: updatedSecret,
       },
       depth: 0,
     });
+
+    lockContext.markSaved();
 
     return summary;
   });
@@ -315,18 +433,32 @@ export async function updateItemQuantity(
 export async function removeItemFromCart(
   payload: Payload,
   cartId: number,
-  itemId: string
+  itemId: string,
+  operationKey?: string
 ): Promise<CartCalculationSummary> {
-  return withCartLock(payload, cartId, async () => {
+  const opKey =
+    operationKey ||
+    `op_rm_${itemId}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
       collection: 'carts',
       id: cartId,
       depth: 0,
     });
 
+    const meta = parseCartMetadata(cart.secret);
+    if (opKey && meta.appliedOps?.includes(opKey)) {
+      lockContext.markSaved();
+      const hydrated = await hydrateCartLines(cart.items || [], payload);
+      return calculateCartSummary(hydrated);
+    }
+
     const items = (cart.items || []).filter((it: any) => String(it.id) !== String(itemId));
     const hydrated = await hydrateCartLines(items, payload);
     const summary = calculateCartSummary(hydrated);
+
+    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
 
     await payload.update({
       collection: 'carts',
@@ -334,9 +466,12 @@ export async function removeItemFromCart(
       data: {
         items,
         subtotal: summary.subtotal,
+        secret: updatedSecret,
       },
       depth: 0,
     });
+
+    lockContext.markSaved();
 
     return summary;
   });
@@ -347,18 +482,40 @@ export async function removeItemFromCart(
  */
 export async function clearPersistentCart(
   payload: Payload,
-  cartId: number
+  cartId: number,
+  operationKey?: string
 ): Promise<CartCalculationSummary> {
-  return withCartLock(payload, cartId, async () => {
+  const opKey =
+    operationKey ||
+    `op_clear_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  return withCartLock(payload, cartId, async (lockContext) => {
+    const cart = await payload.findByID({
+      collection: 'carts',
+      id: cartId,
+      depth: 0,
+    });
+
+    const meta = parseCartMetadata(cart.secret);
+    if (opKey && meta.appliedOps?.includes(opKey)) {
+      lockContext.markSaved();
+      return calculateCartSummary([]);
+    }
+
+    const updatedSecret = serializeCartMetadata(opKey, cart.secret);
+
     await payload.update({
       collection: 'carts',
       id: cartId,
       data: {
         items: [],
         subtotal: 0,
+        secret: updatedSecret,
       },
       depth: 0,
     });
+
+    lockContext.markSaved();
 
     return calculateCartSummary([]);
   });

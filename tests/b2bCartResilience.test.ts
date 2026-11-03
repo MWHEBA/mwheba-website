@@ -468,6 +468,54 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(result).toBe('success_after_retry');
       expect(attempts).toBe(2);
     });
+
+    it('prevents quantity duplication when database save succeeds but response is interrupted (Idempotent Post-Save Interruption)', async () => {
+      const cart = await getOrCreateCart(payload);
+      createdCartIds.push(cart.id);
+
+      const opKey = `test_op_idempotency_${Date.now()}`;
+
+      // 1. Initial addition: 5 units with operationKey
+      const initialSummary = await addItemToCart(payload, cart.id, {
+        productId: physicalProductA.id,
+        variantId: variantA1.id,
+        quantity: 5,
+        operationKey: opKey,
+      });
+      expect(initialSummary.totalItemsCount).toBe(5);
+
+      // 2. Simulate scenario: The save succeeded in PostgreSQL, but client connection was interrupted
+      // and client retries the exact same mutation with the same operationKey
+      const retrySummary = await addItemToCart(payload, cart.id, {
+        productId: physicalProductA.id,
+        variantId: variantA1.id,
+        quantity: 5,
+        operationKey: opKey, // Identical operation key on retry
+      });
+
+      // Assert that retry did NOT double the quantity (must strictly remain 5, not 10!)
+      expect(retrySummary.totalItemsCount).toBe(5);
+      expect(retrySummary.productGroupings[physicalProductA.id].totalQuantity).toBe(5);
+
+      // 3. Simulate failure right after markSaved inside withCartLock
+      // withCartLock must recover the committed state and NOT re-execute or corrupt
+      const recoveredSummary = await withCartLock<any>(payload, cart.id, async (lockContext) => {
+        // Mark as saved, then simulate dropped response
+        lockContext.markSaved();
+        throw new Error('ECONNRESET: Connection dropped after database commit');
+      });
+
+      expect(recoveredSummary.totalItemsCount).toBe(5);
+
+      // Verify PostgreSQL table state directly
+      const finalDbCart = await payload.findByID({
+        collection: 'carts',
+        id: cart.id,
+        depth: 0,
+      });
+      expect(finalDbCart.items?.length).toBe(1);
+      expect(finalDbCart.items?.[0].quantity).toBe(5);
+    });
   });
 
   describe('7. Fixed-Price Service Package Single Unit Checkout', () => {
