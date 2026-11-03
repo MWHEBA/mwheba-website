@@ -27,7 +27,7 @@ export async function withCartLock<T>(
   mutator: () => Promise<T>,
   maxRetries: number = 3
 ): Promise<T> {
-  // 1. In-process serialization per cartId
+  // 1. In-process serialization per cartId within this process
   while (inProcessLocks.has(cartId)) {
     try {
       await inProcessLocks.get(cartId);
@@ -42,49 +42,65 @@ export async function withCartLock<T>(
   });
   inProcessLocks.set(cartId, inProcessPromise);
 
-  const pool = (payload.db as any)?.pool;
-  let client: any = null;
-
   try {
-    if (pool) {
-      try {
-        client = await pool.connect();
-        // Acquire PostgreSQL 64-bit advisory lock for cross-process concurrency
-        await client.query('SELECT pg_advisory_lock($1)', [cartId]);
-      } catch {
-        // Fall back to in-process lock if pool connection fails
-        if (client) {
-          try { client.release(); } catch {}
-          client = null;
-        }
-      }
+    const pool = (payload.db as any)?.pool;
+    if (!pool) {
+      throw new Error(
+        'DATABASE_LOCK_UNAVAILABLE: PostgreSQL database pool is required for atomic cart mutations.'
+      );
     }
 
     let lastError: any;
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      let client: any = null;
+      let lockAcquired = false;
+
       try {
-        return await mutator();
+        client = await pool.connect();
+        // Acquire PostgreSQL 64-bit advisory lock for cross-process concurrency
+        await client.query('SELECT pg_advisory_lock($1)', [cartId]);
+        lockAcquired = true;
+
+        const result = await mutator();
+        return result;
       } catch (err: any) {
         lastError = err;
-        if (attempt < maxRetries) {
-          await new Promise((resolve) => setTimeout(resolve, attempt * 40));
+        const isRetryable =
+          err.code === '40001' || // serialization_failure
+          err.code === '40P01' || // deadlock_detected
+          err.message?.includes('deadlock') ||
+          err.message?.includes('could not serialize') ||
+          err.message?.includes('connection');
+
+        if (isRetryable && attempt < maxRetries) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 50));
           continue;
         }
+
+        // Fail-closed: Never fall back to in-process locking if DB lock failed
+        if (!lockAcquired) {
+          throw new Error(
+            `DATABASE_LOCK_FAILED: Failed to acquire atomic PostgreSQL cart lock for cart ${cartId}: ${err.message}`
+          );
+        }
         throw err;
+      } finally {
+        if (client) {
+          if (lockAcquired) {
+            try {
+              await client.query('SELECT pg_advisory_unlock($1)', [cartId]);
+            } catch {
+              // Ignore unlock cleanup error
+            }
+          }
+          try {
+            client.release();
+          } catch {}
+        }
       }
     }
     throw lastError;
   } finally {
-    if (client) {
-      try {
-        await client.query('SELECT pg_advisory_unlock($1)', [cartId]);
-      } catch {
-        // Ignore unlock error
-      }
-      try {
-        client.release();
-      } catch {}
-    }
     inProcessLocks.delete(cartId);
     releaseInProcess();
   }

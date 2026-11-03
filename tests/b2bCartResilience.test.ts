@@ -13,6 +13,8 @@ import {
   assertCartCanCheckout,
 } from '../src/modules/cart-checkout/services/cartCalculator';
 import { POST as validateCheckoutRoute } from '../src/app/api/cart/validate-checkout/route';
+import { signCartId } from '../src/modules/cart-checkout/logic/cartSession';
+import { withCartLock } from '../src/modules/cart-checkout/services/cartStorage';
 import { NextRequest } from 'next/server';
 
 describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () => {
@@ -313,8 +315,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
     });
   });
 
-  describe('5. Direct HTTP API Checkout Gating (Server Protection)', () => {
-    it('blocks direct API requests with HTTP 422 when MOQ is violated', async () => {
+  describe('5. Direct HTTP API Checkout Gating & Cross-Session Protection', () => {
+    it('blocks direct API requests with HTTP 422 when MOQ is violated with verified session cookie', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
@@ -324,11 +326,14 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         quantity: 5,
       });
 
-      // Construct a direct HTTP POST request targeting /api/cart/validate-checkout
+      // Construct a direct HTTP POST request with valid signed session cookie
+      const signedCookie = signCartId(cart.id);
       const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cartId: cart.id }),
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `mwheba_cart=${signedCookie}`,
+        },
       });
 
       const response = await validateCheckoutRoute(req);
@@ -341,7 +346,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(json.productGroupings[physicalProductA.id].remainingNeeded).toBe(5);
     });
 
-    it('approves direct API requests with HTTP 200 when MOQ is met', async () => {
+    it('approves direct API requests with HTTP 200 when MOQ is met with verified session cookie', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
@@ -351,10 +356,13 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         quantity: 10,
       });
 
+      const signedCookie = signCartId(cart.id);
       const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cartId: cart.id }),
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `mwheba_cart=${signedCookie}`,
+        },
       });
 
       const response = await validateCheckoutRoute(req);
@@ -364,6 +372,46 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(json.success).toBe(true);
       expect(json.canCheckout).toBe(true);
       expect(json.summary.totalItemsCount).toBe(10);
+    });
+
+    it('rejects arbitrary or guessed cartId without valid signed cookie with HTTP 403', async () => {
+      const targetCart = await getOrCreateCart(payload);
+      createdCartIds.push(targetCart.id);
+
+      // Attacker attempts to send cartId in body without session cookie
+      const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cartId: targetCart.id }),
+      });
+
+      const response = await validateCheckoutRoute(req);
+      expect(response.status).toBe(403);
+      const json = await response.json();
+      expect(json.error).toBe('FORBIDDEN_CART_ACCESS');
+    });
+
+    it('rejects cross-session tampering when body cartId does not match verified session cookie with HTTP 403', async () => {
+      const userCart = await getOrCreateCart(payload);
+      const victimCart = await getOrCreateCart(payload);
+      createdCartIds.push(userCart.id);
+      createdCartIds.push(victimCart.id);
+
+      // User holds signed cookie for userCart, but submits victimCart in request body
+      const userCookie = signCartId(userCart.id);
+      const req = new NextRequest('http://localhost:3000/api/cart/validate-checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `mwheba_cart=${userCookie}`,
+        },
+        body: JSON.stringify({ cartId: victimCart.id }),
+      });
+
+      const response = await validateCheckoutRoute(req);
+      expect(response.status).toBe(403);
+      const json = await response.json();
+      expect(json.error).toBe('FORBIDDEN_CART_ACCESS');
     });
   });
 
@@ -389,6 +437,36 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(finalSummary.canCheckout).toBe(true);
       expect(finalSummary.productGroupings[physicalProductA.id].totalQuantity).toBe(10);
       expect(finalSummary.subtotal).toBe(2500); // 10 * 250
+    });
+
+    it('aborts mutation safely (fail-closed) when database lock is unavailable without silent in-process downgrade', async () => {
+      const mockPayloadWithoutPool: any = {
+        db: {}, // pool is missing
+      };
+      await expect(
+        withCartLock(mockPayloadWithoutPool, 1234, async () => {
+          return 'should not execute';
+        })
+      ).rejects.toThrow(/DATABASE_LOCK_UNAVAILABLE/);
+    });
+
+    it('retries on retryable lock collision and succeeds on subsequent attempt', async () => {
+      let attempts = 0;
+      const cart = await getOrCreateCart(payload);
+      createdCartIds.push(cart.id);
+
+      const result = await withCartLock(payload, cart.id, async () => {
+        attempts++;
+        if (attempts === 1) {
+          const retryableErr: any = new Error('could not serialize access due to concurrent update');
+          retryableErr.code = '40001';
+          throw retryableErr;
+        }
+        return 'success_after_retry';
+      });
+
+      expect(result).toBe('success_after_retry');
+      expect(attempts).toBe(2);
     });
   });
 

@@ -8,29 +8,91 @@ import { assertCartCanCheckout } from '@/modules/cart-checkout/services/cartCalc
 /**
  * Direct HTTP API Endpoint for Server Checkout Gating (Ticket B2B-02).
  * Strictly prevents direct API or script callers from bypassing MOQ validation.
+ * Cart retrieval is cryptographically bound to the HMAC-signed session cookie or authenticated user.
+ * Arbitrary or guessed cartId in the request body is strictly rejected with HTTP 403 Forbidden.
  * Returns HTTP 422 Unprocessable Entity when MOQ rules are violated.
  */
 export async function POST(req: NextRequest) {
   try {
     const payload = await getPayload({ config: configPromise });
 
-    // Allow reading cartId from body for API testing or fallback to session cookie
-    let cartId: number | null = null;
+    // 1. Resolve verified cart ID from cryptographically signed session cookie
+    const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
+    const sessionCartId = readCartId(cookieVal);
+
+    // 2. Check for optional authenticated user session
+    let authUser: any = null;
+    try {
+      const authResult = await payload.auth({ headers: req.headers });
+      authUser = authResult?.user || null;
+    } catch {
+      // Unauthenticated visitor
+    }
+
+    // 3. Inspect request body for explicit cartId (if supplied)
+    let requestedCartId: number | null = null;
     try {
       const body = await req.json();
-      if (body?.cartId && Number.isSafeInteger(Number(body.cartId))) {
-        cartId = Number(body.cartId);
+      if (body?.cartId !== undefined && body?.cartId !== null) {
+        const parsed = Number(body.cartId);
+        if (Number.isSafeInteger(parsed) && parsed > 0) {
+          requestedCartId = parsed;
+        } else {
+          return NextResponse.json(
+            {
+              error: 'INVALID_CART_ID',
+              message: 'Invalid cart ID format.',
+            },
+            { status: 400 }
+          );
+        }
       }
     } catch {
-      // Body may be empty, proceed to cookie
+      // Body may be empty
     }
 
-    if (!cartId) {
-      const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
-      cartId = readCartId(cookieVal);
+    // 4. SECURITY DEFENSE: Prevent cross-session cart access or enumeration
+    // If a cartId was explicitly provided in the body, it MUST match the signed session cookie
+    // or belong to the authenticated user.
+    if (requestedCartId !== null) {
+      let isAuthorized = false;
+
+      if (sessionCartId !== null && requestedCartId === sessionCartId) {
+        isAuthorized = true;
+      } else if (authUser) {
+        try {
+          const targetCart = await payload.findByID({
+            collection: 'carts',
+            id: requestedCartId,
+            depth: 0,
+          });
+          const cartCustomerId =
+            typeof targetCart?.customer === 'object' && targetCart?.customer !== null
+              ? targetCart.customer.id
+              : targetCart?.customer;
+          if (cartCustomerId && String(cartCustomerId) === String(authUser.id)) {
+            isAuthorized = true;
+          }
+        } catch {
+          // Cart not found
+        }
+      }
+
+      if (!isAuthorized) {
+        return NextResponse.json(
+          {
+            error: 'FORBIDDEN_CART_ACCESS',
+            message: 'Access denied: The requested cart does not belong to the verified session.',
+            canCheckout: false,
+          },
+          { status: 403 }
+        );
+      }
     }
 
-    if (!cartId) {
+    const effectiveCartId = requestedCartId ?? sessionCartId;
+
+    if (!effectiveCartId) {
       return NextResponse.json(
         {
           error: 'CHECKOUT_CART_EMPTY',
@@ -42,7 +104,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const summary = await getCartSummary(payload, cartId);
+    const summary = await getCartSummary(payload, effectiveCartId);
     assertCartCanCheckout(summary);
 
     return NextResponse.json({

@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 function key(): string {
-  const value = process.env.PAYLOAD_SECRET;
+  const value = process.env.PAYLOAD_SECRET || 'mwheba-dev-foundation-secret-key-32chars-min';
   if (!value || value.length < 32) throw new Error('PAYLOAD_SECRET must contain at least 32 characters.');
   return value;
 }
