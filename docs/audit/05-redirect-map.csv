@@ -1,0 +1,55 @@
+legacy_url,target_url,action_classification,status_code,route_type,notes
+https://mwheba.com/ar/خدماتنا/تطوير-المواقع/,https://mwheba.com/ar/services/web-development,REDIRECT_301,301,Service Detail,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/خدماتنا/تصميم-واجهة-المستخدم/,https://mwheba.com/ar/services/ui-ux-design,REDIRECT_301,301,Service Detail,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/خدماتنا/الطباعة/,https://mwheba.com/ar/services/printing,REDIRECT_301,301,Service Detail,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/خدماتنا/إنتاج-الوسائط/,https://mwheba.com/ar/services/media-production,REDIRECT_301,301,Service Detail,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/خدماتنا/التسويق-الرقمي/,https://mwheba.com/ar/services/digital-marketing,REDIRECT_301,301,Service Detail,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/خدماتنا/هوية-العلامة-التجارية/,https://mwheba.com/ar/services/brand-identity,REDIRECT_301,301,Service Detail,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/خدماتنا/,https://mwheba.com/ar/services,REDIRECT_301,301,Service Hub,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/الاسترداد-والإرجاع/,https://mwheba.com/ar/refund-policy,REDIRECT_301,301,Legal Document,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/سياسة-الخصوصية/,https://mwheba.com/ar/privacy-policy,REDIRECT_301,301,Legal Document,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/مشاريعنا/,https://mwheba.com/ar/portfolio,REDIRECT_301,301,Portfolio Hub,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/,https://mwheba.com/ar,REDIRECT_301,301,Core Homepage,Trailing slash normalized to clean non-trailing-slash Arabic homepage route
+https://mwheba.com/ar/تواصل-معنا/,https://mwheba.com/ar/contact,REDIRECT_301,301,Corporate Page,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/الوظائف/,https://mwheba.com/ar/careers,REDIRECT_301,301,Corporate Page,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/المدونة/,https://mwheba.com/ar/blog,REDIRECT_301,301,Blog Archive,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/ar/عن-موهبة/,https://mwheba.com/ar/about,REDIRECT_301,301,Corporate Page,Provisional target; Arabic slug normalized to clean Latin route
+https://mwheba.com/refund_returns/,https://mwheba.com/en/refund-policy,REDIRECT_301,301,Legal Document,Provisional target; slug normalized from underscore refund_returns
+https://mwheba.com/my-account/,https://mwheba.com/en/my-account,REDIRECT_301,301,Commerce Route,WooCommerce legacy my-account redirected to Next.js commerce route
+https://mwheba.com/checkout/,https://mwheba.com/en/checkout,REDIRECT_301,301,Commerce Route,WooCommerce legacy checkout redirected to Next.js commerce route
+https://mwheba.com/cart/,https://mwheba.com/en/cart,REDIRECT_301,301,Commerce Route,WooCommerce legacy cart redirected to Next.js commerce route
+https://mwheba.com/shop/,https://mwheba.com/en/shop,REDIRECT_301,301,Commerce Route,WooCommerce legacy shop redirected to Next.js commerce route
+https://mwheba.com/services/ui-ux-design/,https://mwheba.com/en/services/ui-ux-design,REDIRECT_301,301,Service Detail,Provisional target in Next.js localized route structure
+https://mwheba.com/services/media-production/,https://mwheba.com/en/services/media-production,REDIRECT_301,301,Service Detail,Provisional target in Next.js localized route structure
+https://mwheba.com/services/web-development/,https://mwheba.com/en/services/web-development,REDIRECT_301,301,Service Detail,Provisional target in Next.js localized route structure
+https://mwheba.com/services/digital-marketing/,https://mwheba.com/en/services/digital-marketing,REDIRECT_301,301,Service Detail,Provisional target in Next.js localized route structure
+https://mwheba.com/services/brand-identity/,https://mwheba.com/en/services/brand-identity,REDIRECT_301,301,Service Detail,Provisional target in Next.js localized route structure
+https://mwheba.com/,https://mwheba.com/,PRESERVE,200,Core Homepage,Canonical domain root; serves localized English layout
+https://mwheba.com/services/,https://mwheba.com/en/services,REDIRECT_301,301,Service Hub,Provisional target in Next.js localized route structure
+https://mwheba.com/our-projects/,https://mwheba.com/en/portfolio,REDIRECT_301,301,Portfolio Hub,Provisional target; normalized from our-projects to portfolio
+https://mwheba.com/pricing/,https://mwheba.com/en/pricing,REDIRECT_301,301,Service Pricing,Provisional target; fixed-price services catalog
+https://mwheba.com/blog/,https://mwheba.com/en/blog,REDIRECT_301,301,Blog Archive,Provisional target in Next.js localized route structure
+https://mwheba.com/contact-us/,https://mwheba.com/en/contact,REDIRECT_301,301,Corporate Page,Provisional target in Next.js localized route structure
+https://mwheba.com/careers/,https://mwheba.com/en/careers,REDIRECT_301,301,Corporate Page,Provisional target in Next.js localized route structure
+https://mwheba.com/services/printing/,https://mwheba.com/en/services/printing,REDIRECT_301,301,Service Detail,Provisional target in Next.js localized route structure
+https://mwheba.com/about/,https://mwheba.com/en/about,REDIRECT_301,301,Corporate Page,Provisional target in Next.js localized route structure
+https://mwheba.com/privacy-policy/,https://mwheba.com/en/privacy-policy,REDIRECT_301,301,Legal Document,Provisional target in Next.js localized route structure
+https://mwheba.com/test-blog-2/,https://mwheba.com/en/blog,GONE_410,410,Demo Blog Post,"Provisional: Dummy post (Test Blog 2 - MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /blog if GSC shows backlinks"
+https://mwheba.com/test-blog/,https://mwheba.com/en/blog,GONE_410,410,Demo Blog Post,"Provisional: Dummy post (Test blog - MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /blog if GSC shows backlinks"
+https://mwheba.com/hello-world/,https://mwheba.com/en/blog,GONE_410,410,Demo Blog Post,"Provisional: Dummy post (Hello world! - MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /blog if GSC shows backlinks"
+https://mwheba.com/portfolio/test/,https://mwheba.com/en/portfolio,GONE_410,410,Demo Portfolio Post,Provisional: Empty dummy portfolio item; serve 410 Gone or 301 to /portfolio
+https://mwheba.com/product/social-media-managemnt-package/,https://mwheba.com/en/services/digital-marketing,REQUIRES_REVIEW,301,Unconfigured Service Test,Provisional: Agency test service with typo; review whether to map to digital marketing package or 410
+https://mwheba.com/product/vintage-typewriter/,https://mwheba.com/en/shop,GONE_410,410,Theme Demo Product,"Provisional: Theme template product (Vintage Typewriter &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+https://mwheba.com/product/leather-clad-leisure-chair/,https://mwheba.com/en/shop,GONE_410,410,Theme Demo Product,"Provisional: Theme template product (Leather-Clad Leisure Chair &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+https://mwheba.com/product/black-and-white/,https://mwheba.com/en/shop,GONE_410,410,Theme Demo Product,"Provisional: Theme template product (Black and White &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+https://mwheba.com/product/3-speed-bike/,https://mwheba.com/en/shop,GONE_410,410,Theme Demo Product,"Provisional: Theme template product (3-Speed Bike &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+https://mwheba.com/product/hi-fi-headphones/,https://mwheba.com/en/shop,GONE_410,410,Theme Demo Product,"Provisional: Theme template product (Hi-Fi Headphones &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+https://mwheba.com/product/retro-glass-jug-330-ml/,https://mwheba.com/en/shop,GONE_410,410,Theme Demo Product,"Provisional: Theme template product (Retro Glass Jug (330 ml) &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+https://mwheba.com/portfolio-category/brand-identity/,https://mwheba.com/en/portfolio?category=brand-identity,REDIRECT_301,301,Taxonomy Archive,Provisional: Taxonomy archive redirect to filtered portfolio route
+https://mwheba.com/portfolio-category/digital-marketing/,https://mwheba.com/en/portfolio?category=digital-marketing,REDIRECT_301,301,Taxonomy Archive,Provisional: Taxonomy archive redirect to filtered portfolio route
+https://mwheba.com/portfolio-category/media-production/,https://mwheba.com/en/portfolio?category=media-production,REDIRECT_301,301,Taxonomy Archive,Provisional: Taxonomy archive redirect to filtered portfolio route
+https://mwheba.com/portfolio-category/printing/,https://mwheba.com/en/portfolio?category=printing,REDIRECT_301,301,Taxonomy Archive,Provisional: Taxonomy archive redirect to filtered portfolio route
+https://mwheba.com/portfolio-category/ui-ux-design/,https://mwheba.com/en/portfolio?category=ui-ux-design,REDIRECT_301,301,Taxonomy Archive,Provisional: Taxonomy archive redirect to filtered portfolio route
+https://mwheba.com/portfolio-category/web-design/,https://mwheba.com/en/portfolio?category=web-design,REDIRECT_301,301,Taxonomy Archive,Provisional: Taxonomy archive redirect to filtered portfolio route
+https://mwheba.com/robots.txt,https://mwheba.com/robots.txt,PRESERVE,200,System File,Next.js app/robots.ts native endpoint; preserved as active system resource
+https://mwheba.com/sitemaps.xml,https://mwheba.com/sitemap.xml,REDIRECT_301,301,System File,Legacy sitemaps.xml permanently redirects to canonical Next.js /sitemap.xml

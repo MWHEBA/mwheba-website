@@ -1,0 +1,68 @@
+name: MWHEBA 2.0 CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-gates:
+    name: Typecheck, Test & Build Verification
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: mwheba_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js (22.x LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Clean Dependency Installation
+        run: npm ci
+
+      - name: Strict TypeScript Compilation
+        run: npm run typecheck
+
+      - name: Run Database Migrations
+        env:
+          DATABASE_URI: postgres://postgres:postgrespassword@localhost:5432/mwheba_test
+          PAYLOAD_SECRET: ci-test-secret-key-at-least-32-chars-long
+        run: npm run migrate:up
+
+      - name: Run Vitest Unit Tests (Clean Source)
+        env:
+          DATABASE_URI: postgres://postgres:postgrespassword@localhost:5432/mwheba_test
+          PAYLOAD_SECRET: ci-test-secret-key-at-least-32-chars-long
+        run: npm test
+
+      - name: Production Application Build
+        env:
+          DATABASE_URI: postgres://postgres:postgrespassword@localhost:5432/mwheba_test
+          PAYLOAD_SECRET: ci-test-secret-key-at-least-32-chars-long
+          PRIVATE_UPLOAD_DIR: /tmp/private-uploads
+        run: npm run build
+
+      - name: Run Post-Build Integration & Layout Tests
+        env:
+          DATABASE_URI: postgres://postgres:postgrespassword@localhost:5432/mwheba_test
+          PAYLOAD_SECRET: ci-test-secret-key-at-least-32-chars-long
+        run: npm run test:postbuild

@@ -1,0 +1,41 @@
+{
+  "name": "mwheba-app",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run --fileParallelism=false --exclude 'tests/**/*.postbuild.test.ts'",
+    "test:postbuild": "vitest run --fileParallelism=false tests/bilingualLayout.postbuild.test.ts",
+    "test:all": "npm test && npm run test:postbuild",
+    "typecheck": "tsc --noEmit",
+    "generate:types": "payload generate:types",
+    "migrate:create": "payload migrate:create",
+    "migrate:up": "payload migrate",
+    "migrate:down": "payload migrate:down",
+    "migrate:status": "payload migrate:status",
+    "db:seed": "tsx src/scripts/seed.ts"
+  },
+  "dependencies": {
+    "@payloadcms/db-postgres": "3.91.0",
+    "@payloadcms/next": "3.91.0",
+    "@payloadcms/plugin-ecommerce": "3.91.0",
+    "@payloadcms/richtext-lexical": "3.91.0",
+    "graphql": "^16.10.0",
+    "next": "15.2.9",
+    "payload": "3.91.0",
+    "react": "19.0.1",
+    "react-dom": "19.0.1",
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/react": "19.0.10",
+    "@types/react-dom": "19.0.4",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2",
+    "vitest": "^3.0.8"
+  }
+}

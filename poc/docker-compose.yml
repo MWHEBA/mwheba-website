@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mwheba_poc_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mwheba
+      POSTGRES_PASSWORD: mwheba_poc_password
+      POSTGRES_DB: mwheba_poc
+    ports:
+      - '5433:5432'
+    volumes:
+      - poc_postgres_data:/var/lib/postgresql/data
+
+volumes:
+  poc_postgres_data:
