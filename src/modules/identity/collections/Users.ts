@@ -16,6 +16,7 @@ export const Users: CollectionConfig = {
         'marketer',
         'catalog_manager',
         'operations',
+        'creative_director',
         'finance',
       ]),
     // Super Admin and Finance can read all users; customers read only their own profile
@@ -70,7 +71,8 @@ export const Users: CollectionConfig = {
         { label: 'Super Administrator', value: 'super_admin' },
         { label: 'Marketer / Content Editor', value: 'marketer' },
         { label: 'Catalog Manager', value: 'catalog_manager' },
-        { label: 'Operations Specialist', value: 'operations' },
+        { label: 'Operations Specialist (Production)', value: 'operations' },
+        { label: 'Creative Director (Service Intake)', value: 'creative_director' },
         { label: 'Finance Officer', value: 'finance' },
         { label: 'Customer', value: 'customer' },
       ],

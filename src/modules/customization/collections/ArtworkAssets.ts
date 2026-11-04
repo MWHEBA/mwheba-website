@@ -9,8 +9,8 @@ export const ArtworkAssets: CollectionConfig = {
   },
   access: {
     read: ({ req }) => {
-      // Super admin, ops, and finance can view all; customers can only view their own
-      if (hasRole(req.user, ['super_admin', 'operations', 'finance'])) {
+      // Super admin and production ops can view all; finance has NO access to production files; customers only their own
+      if (hasRole(req.user, ['super_admin', 'operations'])) {
         return true;
       }
       if (req.user) {

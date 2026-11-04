@@ -210,7 +210,9 @@ export interface User {
    * Egyptian Tax Registration Number (الرقم الضريبي)
    */
   taxId?: string | null;
-  roles: ('super_admin' | 'marketer' | 'catalog_manager' | 'operations' | 'finance' | 'customer')[];
+  roles: (
+    'super_admin' | 'marketer' | 'catalog_manager' | 'operations' | 'creative_director' | 'finance' | 'customer'
+  )[];
   updatedAt: string;
   createdAt: string;
   email: string;
@@ -1200,7 +1202,7 @@ export interface ServiceBrief {
     | null;
   submittedAt: string;
   /**
-   * Creative-director notification outbox state. Delivery transport is wired in a later phase.
+   * Creative-director notification outbox. "pending" is an outstanding work item, NOT evidence of delivery. No transport is wired yet (real email deferred by owner decision), so nothing sets "sent".
    */
   notificationStatus?: ('pending' | 'sent' | 'failed') | null;
   updatedAt: string;

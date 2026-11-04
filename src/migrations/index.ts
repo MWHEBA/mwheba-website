@@ -1,5 +1,6 @@
 import * as migration_20261103_013744_baseline_foundation from './20261103_013744_baseline_foundation';
 import * as migration_20261104_110000_b2b05_fulfillment_jobs_and_briefs from './20261104_110000_b2b05_fulfillment_jobs_and_briefs';
+import * as migration_20261104_120000_b2b05_creative_role_and_unique_brief from './20261104_120000_b2b05_creative_role_and_unique_brief';
 import * as migration_20261103_013844_add_categories from './20261103_013844_add_categories';
 import * as migration_20261103_035158_add_localized_pages_and_blocks from './20261103_035158_add_localized_pages_and_blocks';
 import * as migration_20261103_042157_add_navigation_global from './20261103_042157_add_navigation_global';
@@ -89,5 +90,10 @@ export const migrations = [
     up: migration_20261104_110000_b2b05_fulfillment_jobs_and_briefs.up,
     down: migration_20261104_110000_b2b05_fulfillment_jobs_and_briefs.down,
     name: '20261104_110000_b2b05_fulfillment_jobs_and_briefs',
+  },
+  {
+    up: migration_20261104_120000_b2b05_creative_role_and_unique_brief.up,
+    down: migration_20261104_120000_b2b05_creative_role_and_unique_brief.down,
+    name: '20261104_120000_b2b05_creative_role_and_unique_brief',
   },
 ];

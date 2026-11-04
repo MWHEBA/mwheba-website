@@ -15,8 +15,10 @@ export const ServiceBriefs: CollectionConfig = {
   },
   access: {
     read: ({ req }) => {
-      if (hasRole(req.user, ['super_admin', 'operations'])) return true;
-      if (req.user) return { customer: { equals: req.user.id } };
+      if (hasRole(req.user, ['super_admin', 'creative_director'])) return true;
+      if (req.user && !hasRole(req.user, ['operations', 'finance', 'marketer', 'catalog_manager'])) {
+        return { customer: { equals: req.user.id } };
+      }
       return false;
     },
     create: () => false,
@@ -25,7 +27,7 @@ export const ServiceBriefs: CollectionConfig = {
   },
   fields: [
     { name: 'order', type: 'relationship', relationTo: 'orders', required: true, index: true },
-    { name: 'job', type: 'relationship', relationTo: 'fulfillment-jobs', required: true, index: true },
+    { name: 'job', type: 'relationship', relationTo: 'fulfillment-jobs', required: true, unique: true, index: true },
     { name: 'customer', type: 'relationship', relationTo: 'users', required: true, index: true },
     {
       name: 'answers',
@@ -45,11 +47,14 @@ export const ServiceBriefs: CollectionConfig = {
       type: 'select',
       defaultValue: 'pending',
       options: [
-        { label: 'Pending (outbox)', value: 'pending' },
-        { label: 'Sent', value: 'sent' },
-        { label: 'Failed', value: 'failed' },
+        { label: 'Pending - NOT delivered (outbox work item)', value: 'pending' },
+        { label: 'Delivered', value: 'sent' },
+        { label: 'Delivery failed', value: 'failed' },
       ],
-      admin: { description: 'Creative-director notification outbox state. Delivery transport is wired in a later phase.' },
+      admin: {
+        description:
+          'Creative-director notification outbox. "pending" is an outstanding work item, NOT evidence of delivery. No transport is wired yet (real email deferred by owner decision), so nothing sets "sent".',
+      },
     },
   ],
   hooks: {

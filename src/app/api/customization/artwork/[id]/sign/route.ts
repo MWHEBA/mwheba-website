@@ -12,7 +12,7 @@ import { createArtworkDownloadToken } from '@/modules/customization/lib/privateS
  * Caller must be:
  * - The session owner (matching guest cart session cookie)
  * - The authenticated uploader
- * - Staff with super_admin or operations role
+ * - Staff with super_admin or operations role (finance and creative roles are NOT granted production-file access here)
  */
 export async function POST(
   req: NextRequest,
@@ -48,7 +48,7 @@ export async function POST(
       const authResult = await payload.auth({ headers: req.headers });
       if (authResult?.user) {
         authUser = authResult.user;
-        if (hasRole(authUser, ['super_admin', 'operations', 'finance'])) {
+        if (hasRole(authUser, ['super_admin', 'operations'])) {
           isAuthorized = true;
         } else if (asset.uploader && String(asset.uploader) === String(authUser.id)) {
           isAuthorized = true;

@@ -1,4 +1,5 @@
 import type { Payload } from 'payload';
+import { sql } from '@payloadcms/db-postgres';
 import { hasRole } from '@/modules/identity/access/roles';
 import { createArtworkDownloadToken } from '@/modules/customization/lib/privateStorage';
 import { lineHasCustomization } from '@/modules/cart-checkout/logic/customizationFee';
@@ -10,7 +11,8 @@ import {
 
 type Actor = { id: number | string; roles?: string[] } | null | undefined;
 
-const OPERATIONS_ROLES = ['super_admin', 'operations'] as const;
+const PRODUCTION_ROLES = ['super_admin', 'operations'] as const;
+const CREATIVE_ROLES = ['super_admin', 'creative_director'] as const;
 
 function fail(code: string, message: string, statusCode: number): never {
   const err = new Error(`${code}: ${message}`);
@@ -20,10 +22,21 @@ function fail(code: string, message: string, statusCode: number): never {
 
 const idOf = (rel: any) => (typeof rel === 'object' && rel !== null ? rel.id : rel);
 
-function requireOperations(user: Actor) {
+/**
+ * Production (operations) works the physical track only; creative directors work the service track only.
+ * super_admin works both. Finance and every other role are refused.
+ */
+function requireStaffForTrack(user: Actor, track: FulfillmentTrack) {
   if (!user) fail('UNAUTHENTICATED', 'Authentication is required.', 401);
-  if (!hasRole(user, [...OPERATIONS_ROLES])) {
-    fail('FORBIDDEN_OPERATIONS_ONLY', 'Only operations staff can perform this action.', 403);
+  const allowed = track === 'physical' ? PRODUCTION_ROLES : CREATIVE_ROLES;
+  if (!hasRole(user, [...allowed])) {
+    fail(
+      'FORBIDDEN_TRACK',
+      track === 'physical'
+        ? 'Only production operations staff can work physical fulfillment jobs.'
+        : 'Only creative directors can work service intake jobs.',
+      403
+    );
   }
 }
 
@@ -51,6 +64,20 @@ const appendHistory = (job: any, entry: Record<string, unknown>) => [
   ...(Array.isArray(job.statusHistory) ? job.statusHistory : []),
   { ...entry, at: new Date().toISOString() },
 ];
+
+/** Row lock on the job inside the active transaction (serializes concurrent customer submissions). */
+async function lockJobRow(payload: Payload, transactionID: unknown, jobId: number | string) {
+  const session = (payload.db as any)?.sessions?.[String(transactionID)];
+  const executor = session?.db;
+  if (!executor || typeof executor.execute !== 'function') return; // unique index remains the backstop
+  await executor.execute(sql`SELECT "id" FROM "fulfillment_jobs" WHERE "id" = ${Number(jobId)} FOR UPDATE`);
+}
+
+function isUniqueViolation(err: any): boolean {
+  const code = err?.code ?? err?.cause?.code;
+  const message = String(err?.message || '');
+  return code === '23505' || /unique|duplicate key/i.test(message);
+}
 
 /**
  * Creates one fulfillment job per order line inside the order transaction.
@@ -121,12 +148,13 @@ export async function transitionJob(
   payload: Payload,
   params: { jobId: number | string; to: FulfillmentStatus; user: Actor }
 ) {
-  requireOperations(params.user);
+  if (!params.user) fail('UNAUTHENTICATED', 'Authentication is required.', 401);
 
   const job: any = await payload
     .findByID({ collection: 'fulfillment-jobs', id: params.jobId, depth: 0 })
     .catch(() => null);
   if (!job) fail('JOB_NOT_FOUND', 'Fulfillment job not found.', 404);
+  requireStaffForTrack(params.user, job.track);
 
   const tx = await beginTx(payload);
   const txReq: any = { payload, transactionID: tx.transactionID };
@@ -231,18 +259,37 @@ export async function approveProof(payload: Payload, params: { orderId: number |
   }
 }
 
-/** Operations staff request a short-lived signed link to a job's private artwork file. */
+/** Production staff request a short-lived signed link to a physical job's private artwork file. */
 export async function signJobArtworkLink(payload: Payload, params: { jobId: number | string; user: Actor }) {
-  requireOperations(params.user);
+  if (!params.user) fail('UNAUTHENTICATED', 'Authentication is required.', 401);
   const job: any = await payload
     .findByID({ collection: 'fulfillment-jobs', id: params.jobId, depth: 0 })
     .catch(() => null);
   if (!job) fail('JOB_NOT_FOUND', 'Fulfillment job not found.', 404);
+  requireStaffForTrack(params.user, 'physical');
   if (job.track !== 'physical' || !job.artworkAssetId) {
     fail('NO_ARTWORK_FOR_JOB', 'This job has no private artwork file.', 404);
   }
   const { token, expiresIn } = createArtworkDownloadToken(job.artworkAssetId, 900);
   return { url: `/api/customization/artwork/${job.artworkAssetId}/download?token=${token}`, expiresIn };
+}
+
+/** Creative directors request a signed link to one reference attachment of a submitted brief. */
+export async function signBriefAttachmentLink(
+  payload: Payload,
+  params: { briefId: number | string; assetId: number | string; user: Actor }
+) {
+  if (!params.user) fail('UNAUTHENTICATED', 'Authentication is required.', 401);
+  requireStaffForTrack(params.user, 'service');
+  const brief: any = await payload
+    .findByID({ collection: 'service-briefs', id: params.briefId, depth: 0 })
+    .catch(() => null);
+  const attachments: unknown[] = Array.isArray(brief?.attachmentAssetIds) ? brief.attachmentAssetIds : [];
+  if (!brief || !attachments.map(String).includes(String(params.assetId))) {
+    fail('ATTACHMENT_NOT_FOUND', 'Attachment not found on this brief.', 404);
+  }
+  const { token, expiresIn } = createArtworkDownloadToken(String(params.assetId), 900);
+  return { url: `/api/customization/artwork/${params.assetId}/download?token=${token}`, expiresIn };
 }
 
 export interface BriefInput {
@@ -321,33 +368,54 @@ export async function submitServiceBrief(
   const tx = await beginTx(payload);
   const txReq: any = { payload, transactionID: tx.transactionID };
   try {
+    // Serialize concurrent submissions for this job: lock the job row, then re-check the status
+    // INSIDE the transaction. The UNIQUE index on service_briefs.job_id is the final database backstop.
+    await lockJobRow(payload, tx.transactionID, job.id);
+    const lockedJob: any = await payload.findByID({ collection: 'fulfillment-jobs', id: job.id, depth: 0, req: txReq });
+    if (!lockedJob || lockedJob.status !== 'pending_brief') {
+      fail('BRIEF_NOT_EXPECTED', 'A brief was already submitted for this service line.', 409);
+    }
+
     const nowIso = new Date().toISOString();
-    const brief = await payload.create({
-      collection: 'service-briefs',
-      data: {
-        order: order.id,
-        job: job.id,
-        customer: params.user!.id as any,
-        answers,
-        attachmentAssetIds: rawAttachments as any,
-        submittedAt: nowIso,
-        notificationStatus: 'pending',
-      },
-      context: { fulfillmentEngine: true },
-      req: txReq,
-    });
+    let brief: any;
+    try {
+      brief = await payload.create({
+        collection: 'service-briefs',
+        data: {
+          order: order.id,
+          job: job.id,
+          customer: params.user!.id as any,
+          answers,
+          attachmentAssetIds: rawAttachments as any,
+          submittedAt: nowIso,
+          notificationStatus: 'pending',
+        },
+        context: { fulfillmentEngine: true },
+        req: txReq,
+      });
+    } catch (err: any) {
+      if (isUniqueViolation(err)) {
+        fail('BRIEF_NOT_EXPECTED', 'A brief was already submitted for this service line.', 409);
+      }
+      throw err;
+    }
     await payload.update({
       collection: 'fulfillment-jobs',
       id: job.id,
       data: {
         status: 'brief_submitted',
-        statusHistory: appendHistory(job, { from: job.status, to: 'brief_submitted', by: `customer:${params.user!.id}`, briefId: brief.id }),
+        statusHistory: appendHistory(lockedJob, { from: lockedJob.status, to: 'brief_submitted', by: `customer:${params.user!.id}`, briefId: brief.id }),
       },
       context: { fulfillmentEngine: true, fulfillmentActor: 'customer_engine' },
       req: txReq,
     });
     await tx.commit();
-    return { briefId: brief.id, jobId: job.id };
+    // The creative-director notification is recorded as outstanding work only; nothing has been delivered.
+    return {
+      briefId: brief.id,
+      jobId: job.id,
+      notification: { status: 'pending', delivered: false },
+    };
   } catch (err) {
     await tx.rollback();
     throw err;

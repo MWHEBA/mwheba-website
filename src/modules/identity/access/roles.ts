@@ -5,6 +5,7 @@ export type UserRole =
   | 'marketer'
   | 'catalog_manager'
   | 'operations'
+  | 'creative_director'
   | 'finance'
   | 'customer';
 

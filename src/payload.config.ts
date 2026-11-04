@@ -123,7 +123,7 @@ export default buildConfig({
           if (hasRole(req.user, ['super_admin', 'catalog_manager', 'marketer'])) return true;
           return { _status: { equals: 'published' } };
         },
-        isCustomer: ({ req }: any) => Boolean(req.user && !hasRole(req.user, ['super_admin', 'catalog_manager', 'operations', 'finance', 'marketer'])),
+        isCustomer: ({ req }: any) => Boolean(req.user && !hasRole(req.user, ['super_admin', 'catalog_manager', 'operations', 'creative_director', 'finance', 'marketer'])),
         isAuthenticated: ({ req }: any) => Boolean(req.user),
         isDocumentOwner: ({ req }: any) => {
           if (!req.user) return false;

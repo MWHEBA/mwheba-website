@@ -24,8 +24,8 @@ export const Media: CollectionConfig = {
   access: {
     read: ({ req, isReadingStaticFile }): any => {
       if (isReadingStaticFile) return { mediaType: { equals: 'public' } };
-      // Admins and finance/ops can view all media assets
-      if (hasRole(req.user, ['super_admin', 'operations', 'finance'])) {
+      // Admins and production ops can view all media assets (finance excluded from private files)
+      if (hasRole(req.user, ['super_admin', 'operations'])) {
         return true;
       }
       // Authenticated users can access public media OR their own uploaded media

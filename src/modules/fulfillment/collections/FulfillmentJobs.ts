@@ -28,13 +28,21 @@ export const FulfillmentJobs: CollectionConfig = {
     description: 'Per-line fulfillment tracking: factory production for physical goods, creative intake for services.',
   },
   access: {
+    // Production (operations) sees physical jobs only; creative directors see service jobs only;
+    // customers see their own order's jobs; finance and everyone else see none.
     read: ({ req }) => {
-      if (hasRole(req.user, ['super_admin', 'operations'])) return true;
-      if (req.user) return { 'order.customer': { equals: req.user.id } };
+      if (hasRole(req.user, ['super_admin'])) return true;
+      const clauses: any[] = [];
+      if (hasRole(req.user, ['operations'])) clauses.push({ track: { equals: 'physical' } });
+      if (hasRole(req.user, ['creative_director'])) clauses.push({ track: { equals: 'service' } });
+      if (clauses.length > 0) return clauses.length === 1 ? clauses[0] : { or: clauses };
+      if (req.user && !hasRole(req.user, ['finance', 'marketer', 'catalog_manager'])) {
+        return { 'order.customer': { equals: req.user.id } };
+      }
       return false;
     },
     create: () => false,
-    update: ({ req }) => hasRole(req.user, ['super_admin', 'operations']),
+    update: ({ req }) => hasRole(req.user, ['super_admin', 'operations', 'creative_director']),
     delete: () => false,
   },
   fields: [
