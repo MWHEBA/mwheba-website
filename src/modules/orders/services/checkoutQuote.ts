@@ -1,6 +1,6 @@
 import type { Payload } from 'payload';
 import { getCartSummary } from '@/modules/cart-checkout/services/cartStorage';
-import { resolveDeliveryTariff } from './deliveryTariff';
+import { resolveDeliveryTariff, getCommerceSettings } from './deliveryTariff';
 
 export interface CheckoutQuoteLine {
   id: string;
@@ -22,21 +22,26 @@ export interface CheckoutQuote {
   currency: 'EGP';
   canCheckout: boolean;
   validationErrors: string[];
-  /** The tariff schedule is a working fixture until the owner approves D-015. */
+  /** The tariff schedule is provisional until the owner approves D-015 in CommerceSettings. */
   isProvisional: boolean;
-  tariffScheduleStatus: 'pending_owner_tariff_approval';
+  tariffScheduleStatus: 'pending_owner_tariff_approval' | 'owner_approved';
 }
 
 /**
  * Builds the server-authoritative quote (lines, fees, shipping, total) for a cart.
- * Prices come from the catalog; nothing is taken from the client except delivery method/governorate.
+ * Prices come from the catalog and active CommerceSettings; nothing is taken from the client except delivery method/governorate.
  */
 export async function buildCheckoutQuote(
   payload: Payload,
   cartId: number,
   delivery: { method: 'shipping' | 'pickup'; governorate?: string }
 ): Promise<CheckoutQuote> {
-  const tariff = resolveDeliveryTariff({ method: delivery.method, governorate: delivery.governorate });
+  const settings = await getCommerceSettings(payload);
+  const tariff = resolveDeliveryTariff({
+    method: delivery.method,
+    governorate: delivery.governorate,
+    schedule: settings,
+  });
   const summary = await getCartSummary(payload, cartId, tariff.amount);
 
   return {

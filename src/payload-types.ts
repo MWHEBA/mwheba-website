@@ -146,10 +146,12 @@ export interface Config {
   globals: {
     navigation: Navigation;
     'inquiry-settings': InquirySetting;
+    'commerce-settings': CommerceSetting;
   };
   globalsSelect: {
     navigation: NavigationSelect<false> | NavigationSelect<true>;
     'inquiry-settings': InquirySettingsSelect<false> | InquirySettingsSelect<true>;
+    'commerce-settings': CommerceSettingsSelect<false> | CommerceSettingsSelect<true>;
   };
   locale: 'ar' | 'en';
   widgets: {
@@ -913,6 +915,22 @@ export interface Order {
         id?: string | null;
       }[]
     | null;
+  /**
+   * Frozen delivery tariff schedule snapshot applied at order placement (D-015).
+   */
+  appliedTariff?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  /**
+   * Frozen production policy snapshot applied at order placement.
+   */
+  appliedProductionPolicy?: ('require_payment_clearance' | 'allow_immediate_production') | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -2124,6 +2142,8 @@ export interface OrdersSelect<T extends boolean = true> {
         entry?: T;
         id?: T;
       };
+  appliedTariff?: T;
+  appliedProductionPolicy?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -2249,6 +2269,47 @@ export interface InquirySetting {
   createdAt?: string | null;
 }
 /**
+ * Runtime operational controls for delivery tariffs (D-015), pre-production payment policy, and notification dispatch.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "commerce-settings".
+ */
+export interface CommerceSetting {
+  id: number;
+  /**
+   * Status of the delivery tariff schedule per DECISIONS.md D-015.
+   */
+  tariffStatus: 'provisional' | 'owner_approved';
+  cairoAndGizaFee: number;
+  alexandriaFee: number;
+  otherGovernoratesFee: number;
+  officePickupFee: number;
+  standardFallbackFee: number;
+  /**
+   * Determines whether factory physical production jobs can advance to in_printing before finance verifies the corporate bank transfer.
+   */
+  productionPolicy: 'allow_immediate_production' | 'require_payment_clearance';
+  emailDispatchMode: 'deferred_review' | 'live_smtp';
+  smtpHost?: string | null;
+  smtpPort?: number | null;
+  smtpUser?: string | null;
+  fromEmail?: string | null;
+  /**
+   * Server-recorded append-only audit trail of operational setting adjustments.
+   */
+  changeLog?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt?: string | null;
+  createdAt?: string | null;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "navigation_select".
  */
@@ -2287,6 +2348,28 @@ export interface InquirySettingsSelect<T extends boolean = true> {
   emailSubjectTemplate?: T;
   emailBodyTemplate?: T;
   enableRealDispatch?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  globalType?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "commerce-settings_select".
+ */
+export interface CommerceSettingsSelect<T extends boolean = true> {
+  tariffStatus?: T;
+  cairoAndGizaFee?: T;
+  alexandriaFee?: T;
+  otherGovernoratesFee?: T;
+  officePickupFee?: T;
+  standardFallbackFee?: T;
+  productionPolicy?: T;
+  emailDispatchMode?: T;
+  smtpHost?: T;
+  smtpPort?: T;
+  smtpUser?: T;
+  fromEmail?: T;
+  changeLog?: T;
   updatedAt?: T;
   createdAt?: T;
   globalType?: T;

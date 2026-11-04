@@ -6,7 +6,7 @@
 import type { Payload } from 'payload';
 import { validateCartMoq } from '../../cart-checkout/logic/moqEngine';
 import { withCartLock } from '../../cart-checkout/services/cartStorage';
-import { resolveDeliveryTariff } from './deliveryTariff';
+import { resolveDeliveryTariff, getCommerceSettings } from './deliveryTariff';
 import { createJobsForOrder } from '@/modules/fulfillment/services/fulfillmentService';
 import { customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
 
@@ -442,10 +442,12 @@ export async function createOrderFromCart(
         };
       });
 
-      // 10. Delivery Tariff Resolution (D-015 Parameterization)
+      // 10. Delivery Tariff Resolution (D-015 Parameterization via CommerceSettings)
+      const settings = await getCommerceSettings(payload);
       const tariffQuote = resolveDeliveryTariff({
         method: delivery.method,
         governorate: delivery.shippingAddress?.governorate,
+        schedule: settings,
       });
 
       if (typeof delivery.expectedShippingFee === 'number' && delivery.expectedShippingFee !== tariffQuote.amount) {
@@ -501,7 +503,7 @@ export async function createOrderFromCart(
         // Fallback to random unique format
       }
 
-      // 12. Create order record inside transaction
+      // 12. Create order record inside transaction with frozen snapshots
       const order = await payload.create({
         collection: 'orders',
         data: {
@@ -523,6 +525,16 @@ export async function createOrderFromCart(
           orderStatus: 'pending',
           paymentStatus: 'unpaid',
           fulfillmentStatus: 'unfulfilled',
+          appliedTariff: {
+            status: tariffQuote.isProvisional ? 'provisional' : 'owner_approved',
+            amount: tariffQuote.amount,
+            currency: 'EGP',
+            governorate: delivery.shippingAddress?.governorate || null,
+            method: delivery.method,
+            tariffScheduleStatus: tariffQuote.tariffScheduleStatus,
+            capturedAt: new Date().toISOString(),
+          },
+          appliedProductionPolicy: settings.productionPolicy || 'require_payment_clearance',
         },
         req: txReq,
       });

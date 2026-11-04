@@ -199,9 +199,20 @@ export async function transitionJob(
       // Surface state-machine verdicts as 409/403 instead of a generic failure
       const message = String(err?.message || err);
       const code = message.split(':')[0];
-      const status = code === 'CUSTOMER_APPROVAL_REQUIRED' || code === 'PROOF_NOT_APPROVED' ? 403 : 409;
+      const status =
+        code === 'CUSTOMER_APPROVAL_REQUIRED' ||
+        code === 'PROOF_NOT_APPROVED' ||
+        code === 'PAYMENT_CLEARANCE_REQUIRED'
+          ? 403
+          : 409;
       const mapped = new Error(message);
-      (mapped as any).statusCode = ['INVALID_TRANSITION', 'WRONG_TRACK', 'CUSTOMER_APPROVAL_REQUIRED', 'PROOF_NOT_APPROVED'].includes(code)
+      (mapped as any).statusCode = [
+        'INVALID_TRANSITION',
+        'WRONG_TRACK',
+        'CUSTOMER_APPROVAL_REQUIRED',
+        'PROOF_NOT_APPROVED',
+        'PAYMENT_CLEARANCE_REQUIRED',
+      ].includes(code)
         ? status
         : err?.statusCode || 400;
       throw mapped;

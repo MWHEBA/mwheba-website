@@ -126,6 +126,19 @@ export const FulfillmentJobs: CollectionConfig = {
           if (!verdict.ok) {
             throw new Error(`${verdict.code}: ${verdict.message}`);
           }
+
+          // Operational Policy Gate: If order is bank_transfer and unpaid, check appliedProductionPolicy
+          if (
+            track === 'physical' &&
+            ['in_printing', 'quality_check', 'ready_for_pickup', 'shipped', 'delivered'].includes(data.status) &&
+            order?.paymentMethod === 'bank_transfer' &&
+            order?.paymentStatus !== 'paid' &&
+            (order?.appliedProductionPolicy || 'require_payment_clearance') === 'require_payment_clearance'
+          ) {
+            throw new Error(
+              'PAYMENT_CLEARANCE_REQUIRED: Bank transfer payment clearance is required before physical production can begin per operational policy.'
+            );
+          }
         }
         return data;
       },

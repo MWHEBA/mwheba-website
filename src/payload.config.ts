@@ -24,6 +24,7 @@ import { Inquiries } from './modules/content/collections/Inquiries';
 import { RateLimitEvents } from './modules/content/collections/RateLimitEvents';
 import { Navigation } from './modules/content/globals/Navigation';
 import { InquirySettings } from './modules/content/globals/InquirySettings';
+import { CommerceSettings } from './modules/orders/globals/CommerceSettings';
 import { validateCartMoq } from './modules/cart-checkout/logic/moqEngine';
 import { toIntegerPiastres } from './modules/orders/logic/orderSnapshotEngine';
 import { paymobWebhookHandler } from './modules/payments/endpoints/paymobWebhook';
@@ -99,7 +100,7 @@ export default buildConfig({
     fallback: true,
   },
   editor: lexicalEditor({}),
-  globals: [Navigation, InquirySettings],
+  globals: [Navigation, InquirySettings, CommerceSettings],
   typescript: {
     outputFile: './src/payload-types.ts',
   },
@@ -473,6 +474,28 @@ export default buildConfig({
                 ],
                 admin: {
                   description: 'Server-recorded append-only audit trail of financial and fulfillment status changes.',
+                },
+              },
+              {
+                name: 'appliedTariff',
+                type: 'json',
+                admin: {
+                  readOnly: true,
+                  description: 'Frozen delivery tariff schedule snapshot applied at order placement (D-015).',
+                },
+              },
+              {
+                name: 'appliedProductionPolicy',
+                type: 'select',
+                defaultValue: 'require_payment_clearance',
+                options: [
+                  { label: 'Require Payment Clearance Before Production', value: 'require_payment_clearance' },
+                  { label: 'Allow Immediate Production', value: 'allow_immediate_production' },
+                ],
+                admin: {
+                  readOnly: true,
+                  position: 'sidebar',
+                  description: 'Frozen production policy snapshot applied at order placement.',
                 },
               },
             ],
