@@ -4,16 +4,64 @@ import { createRoot } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { CartProvider } from '@/modules/cart-checkout/context/CartContext';
 import { CheckoutView } from '@/modules/cart-checkout/ui/CheckoutView';
+
+
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
 import { signCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { CART_COOKIE_NAME, getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
-import { createOrderFromCart } from '@/modules/orders/services/orderService';
+import { createOrderFromCart as createOrderFromCartRaw } from '@/modules/orders/services/orderService';
+import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
+import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { resolveDeliveryTariff } from '@/modules/orders/services/deliveryTariff';
-import { POST as checkoutRoute } from '@/app/api/checkout/create-order/route';
+import { POST as checkoutRouteRaw } from '@/app/api/checkout/create-order/route';
 import { POST as quoteRoute } from '@/app/api/checkout/quote/route';
 import { GET as cartItemsGet, POST as cartItemsPost } from '@/app/api/cart/items/route';
+
+/**
+ * expectedGrandTotal is mandatory on the purchase path. Tests that are not about the approval step
+ * behave like a real client: they take the server quote first and confirm that exact total.
+ * Tests of the approval step itself use the *Raw functions (no automatic total).
+ */
+const createOrderFromCart = async (payload: any, input: any) => {
+  if (input.expectedGrandTotal === undefined) {
+    let expectedGrandTotal = 0;
+    try {
+      const quote = await buildCheckoutQuote(payload, input.cartId, {
+        method: input.delivery?.method === 'pickup' ? 'pickup' : 'shipping',
+        governorate: input.delivery?.shippingAddress?.governorate,
+      });
+      expectedGrandTotal = quote.grandTotal;
+    } catch {
+      // Let the service surface its own validation error
+    }
+    return createOrderFromCartRaw(payload, { ...input, expectedGrandTotal });
+  }
+  return createOrderFromCartRaw(payload, input);
+};
+
+const checkoutRoute = async (req: NextRequest) => {
+  const body: any = await req.clone().json();
+  if (body.expectedGrandTotal === undefined) {
+    const cartId = readCartId(req.cookies.get(CART_COOKIE_NAME)?.value);
+    if (cartId) {
+      const payload = await getPayload({ config: configPromise });
+      try {
+        const quote = await buildCheckoutQuote(payload, cartId, {
+          method: body.delivery?.method === 'pickup' ? 'pickup' : 'shipping',
+          governorate: body.delivery?.shippingAddress?.governorate,
+        });
+        body.expectedGrandTotal = quote.grandTotal;
+      } catch {
+        body.expectedGrandTotal = 0;
+      }
+    }
+    req = new NextRequest(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(body) });
+  }
+  return checkoutRouteRaw(req);
+};
+
 
 describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', () => {
   let payload: any;
@@ -1763,6 +1811,219 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         global.document = originalDocument;
         global.fetch = originalFetch;
         (globalThis as any).self = originalSelf;
+      }
+    });
+  });
+
+  // =========================================================================
+  // 12. Single customization-fee rule & mandatory expectedGrandTotal
+  // =========================================================================
+  describe('12. Unified customization fee rule and mandatory customer-approved total', () => {
+    const customerFor = (tag: string) => ({
+      email: `${tag}_${Date.now()}_${Math.floor(Math.random() * 1e6)}@mwheba.test`,
+      password: 'SecurePassword2026!',
+      companyName: `${tag} Corp`,
+      contactPerson: 'Test Buyer',
+      phone: '+201012345678',
+    });
+
+    const makeCart = async (item: Record<string, unknown>) => {
+      const cart = await getOrCreateCart(payload);
+      cleanupCartIds.push(cart.id);
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: { items: [{ product: physicalProductA.id, quantity: 10, ...item }] },
+      });
+      return cart;
+    };
+
+    const jsonReq = (url: string, cookie: string, body: any) =>
+      new NextRequest(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie },
+        body: JSON.stringify(body),
+      });
+
+    it('charges the customization fee for printingNotes without an artwork file, identically in quote, order and saved record', async () => {
+      const cart = await makeCart({ printingNotes: 'Engrave company logo on lid' });
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const delivery = { method: 'pickup' as const };
+
+      // Display: the quote (what CheckoutView renders)
+      const quote = await (
+        await quoteRoute(jsonReq('http://localhost:3000/api/checkout/quote', cookie, { delivery }))
+      ).json();
+      expect(quote.totalCustomizationFees).toBe(300); // 30 EGP * 10 units
+      expect(quote.items[0].lineCustomizationFee).toBe(300);
+      expect(quote.grandTotal).toBe(2300);
+
+      // Order: confirming that exact total must succeed (no endless 409)
+      const res = await checkoutRouteRaw(
+        jsonReq('http://localhost:3000/api/checkout/create-order', cookie, {
+          customer: customerFor('notes_only'),
+          delivery,
+          paymentMethod: 'bank_transfer',
+          expectedGrandTotal: quote.grandTotal,
+        })
+      );
+      expect(res.status).toBe(201);
+      const created = await res.json();
+      cleanupOrderIds.push(created.orderId);
+      cleanupUserIds.push(created.customerId);
+
+      // Saved record equals the displayed amount, with the same fee rule
+      const saved: any = await payload.findByID({ collection: 'orders', id: created.orderId });
+      expect(Number(saved.amount ?? saved.total)).toBe(quote.grandTotal);
+      expect(saved.totalCustomizationFees).toBe(300);
+      expect(saved.items[0].customizationFee).toBe(30);
+      expect(saved.items[0].lineTotal).toBe(2300);
+    });
+
+    it('CheckoutView shows the notes-only customization fee and the placed order matches the displayed total', async () => {
+      (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+      const window = new Window();
+      const document = window.document;
+      const originalWindow = global.window;
+      const originalDocument = global.document;
+      const originalFetch = global.fetch;
+      const originalSelf = (globalThis as any).self;
+      global.window = window as any;
+      global.document = document as any;
+      (globalThis as any).self = globalThis;
+
+      const cart = await makeCart({ printingNotes: 'Engrave company logo on lid' });
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
+        const method = init?.method || 'GET';
+        const req = new NextRequest(`http://localhost:3000${url}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Cookie: cookie, ...(init?.headers || {}) },
+          body: init?.body,
+        });
+        if (url.startsWith('/api/cart/items')) return cartItemsGet(req);
+        if (url.startsWith('/api/checkout/quote')) return quoteRoute(req);
+        if (url.startsWith('/api/checkout/create-order')) return checkoutRouteRaw(req); // no auto total: the view must send it
+        throw new Error(`Unexpected fetch ${url}`);
+      }) as any;
+
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container as any);
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const text = () =>
+        (container.textContent || '')
+          .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+          .replace(/\u066C/g, ',');
+      const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 6000) => {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+          if (await predicate()) return;
+          await act(async () => {
+            await wait(100);
+          });
+        }
+        throw new Error(`waitFor timed out. Current text: ${text().slice(-700)}`);
+      };
+      const setValue = (el: any, value: string) => {
+        const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const propsKey = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+        const props = propsKey ? el[propsKey] : null;
+        if (!props?.onChange) throw new Error('Input has no React onChange handler');
+        Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+        props.onChange({ target: el, currentTarget: el });
+      };
+
+      try {
+        await act(async () => {
+          root.render(React.createElement(CartProvider, null, React.createElement(CheckoutView, { locale: 'en' })));
+          await wait(50);
+        });
+        // 2000 base + 300 notes-only customization + 80 provisional Cairo shipping
+        await waitFor(() => text().includes('2,380'));
+        expect(text()).toContain('Branded (+300 EGP)');
+
+        await act(async () => {
+          container.querySelectorAll('input, textarea').forEach((el: any) => {
+            if (el.type === 'radio' || el.type === 'checkbox') return;
+            if (el.type === 'email') setValue(el, `notes_view_${Date.now()}@mwheba.test`);
+            else if (el.type === 'password') setValue(el, 'SecurePassword2026!');
+            else if (el.type === 'tel') setValue(el, '+201012345678');
+            else if (!el.value) setValue(el, 'Test Value');
+          });
+          await wait(50);
+        });
+
+        const form = container.querySelector('form') as any;
+        await act(async () => {
+          form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+          await wait(50);
+        });
+        await waitFor(async () => (await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs === 1);
+
+        const order: any = (await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).docs[0];
+        cleanupOrderIds.push(order.id);
+        cleanupUserIds.push(typeof order.customer === 'object' ? order.customer.id : order.customer);
+        expect(Number(order.amount ?? order.total)).toBe(2380);
+        expect(order.totalCustomizationFees).toBe(300);
+        expect(order.shippingFee).toBe(80);
+      } finally {
+        await act(async () => {
+          root.unmount();
+          await wait(20);
+        });
+        global.window = originalWindow;
+        global.document = originalDocument;
+        global.fetch = originalFetch;
+        (globalThis as any).self = originalSelf;
+      }
+    });
+
+    it('rejects a purchase without expectedGrandTotal (API and service) and creates nothing', async () => {
+      const cart = await makeCart({});
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const baseBody = { customer: customerFor('no_total'), delivery: { method: 'pickup' }, paymentMethod: 'bank_transfer' };
+
+      // API: missing
+      const missing = await checkoutRouteRaw(jsonReq('http://localhost:3000/api/checkout/create-order', cookie, baseBody));
+      expect(missing.status).toBe(400);
+      expect((await missing.json()).error).toContain('EXPECTED_GRAND_TOTAL_REQUIRED');
+
+      // API: wrong type
+      const wrongType = await checkoutRouteRaw(
+        jsonReq('http://localhost:3000/api/checkout/create-order', cookie, { ...baseBody, expectedGrandTotal: '2000' })
+      );
+      expect(wrongType.status).toBe(400);
+      expect((await wrongType.json()).error).toContain('EXPECTED_GRAND_TOTAL_REQUIRED');
+
+      // Service: direct call without the approved total
+      await expect(
+        createOrderFromCartRaw(payload, {
+          cartId: cart.id,
+          guestSecret: cart.secret,
+          customer: customerFor('no_total_svc'),
+          delivery: { method: 'pickup' },
+          paymentMethod: 'bank_transfer',
+        } as any)
+      ).rejects.toThrowError(/EXPECTED_GRAND_TOTAL_REQUIRED/);
+
+      expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+      const stillThere: any = await payload.findByID({ collection: 'carts', id: cart.id });
+      expect(stillThere.items).toHaveLength(1);
+      expect(stillThere.purchasedAt).toBeFalsy();
+
+      // A stale total (price changed after the quote) is still rejected with 409
+      const quote = await buildCheckoutQuote(payload, cart.id, { method: 'pickup' });
+      await payload.update({ collection: 'products', id: physicalProductA.id, data: { basePrice: 270, priceInEGP: 270 } });
+      try {
+        const stale = await checkoutRouteRaw(
+          jsonReq('http://localhost:3000/api/checkout/create-order', cookie, { ...baseBody, expectedGrandTotal: quote.grandTotal })
+        );
+        expect(stale.status).toBe(409);
+        expect((await stale.json()).error).toContain('PRICE_QUOTE_MISMATCH');
+      } finally {
+        await payload.update({ collection: 'products', id: physicalProductA.id, data: { basePrice: 200, priceInEGP: 200 } });
       }
     });
   });

@@ -5,6 +5,7 @@
  */
 
 import { CartCalculationResult, CartLineItem, ProductItem, assertCanCheckout } from '../../cart-checkout/logic/moqEngine';
+import { lineHasCustomization, customizationFeePerUnit } from '../../cart-checkout/logic/customizationFee';
 
 export type { CartLineItem, ProductItem, CartCalculationResult };
 
@@ -140,11 +141,11 @@ export function createOrderSnapshot(
   const itemSnapshots: OrderItemSnapshot[] = cartItems.map((item) => {
     const product = products[item.productId];
     const unitBasePrice = product.basePrice;
-    const unitCustomizationFee = (item.artworkAssetId || item.printingNotes) ? (product.customizationFee || 0) : 0;
+    const unitCustomizationFee = customizationFeePerUnit(item, product);
     const lineSubtotal = unitBasePrice * item.quantity;
     const lineCustomizationTotal = unitCustomizationFee * item.quantity;
 
-    if (item.artworkAssetId || item.printingNotes) {
+    if (lineHasCustomization(item)) {
       hasCustomization = true;
     }
 

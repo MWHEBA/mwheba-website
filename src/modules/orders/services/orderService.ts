@@ -7,6 +7,7 @@ import type { Payload } from 'payload';
 import { validateCartMoq } from '../../cart-checkout/logic/moqEngine';
 import { withCartLock } from '../../cart-checkout/services/cartStorage';
 import { resolveDeliveryTariff } from './deliveryTariff';
+import { customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
 
 export interface CreateOrderCustomerInput {
   email: string;
@@ -42,8 +43,8 @@ export interface CreateOrderFromCartInput {
   customer: CreateOrderCustomerInput;
   delivery: CreateOrderDeliveryInput;
   paymentMethod: 'cod' | 'bank_transfer';
-  /** Grand total the customer saw (from the server quote). Rejected with 409 if the server total differs. */
-  expectedGrandTotal?: number;
+  /** Grand total the customer saw (from the server quote). REQUIRED: rejected with 409 if the server total differs. */
+  expectedGrandTotal: number;
 }
 
 export interface CreateOrderResult {
@@ -90,6 +91,13 @@ export async function createOrderFromCart(
       'PAYMOB_GATEWAY_DEFERRED: Online gateway payments (Paymob) are deferred to Phase 2 per DECISIONS.md D-008. Please choose Corporate Bank Transfer or Cash on Delivery.'
     );
     (err as any).statusCode = 422;
+    throw err;
+  }
+
+  // The customer must confirm the exact total they saw; direct calls cannot skip this approval step.
+  if (typeof input.expectedGrandTotal !== 'number' || !Number.isFinite(input.expectedGrandTotal)) {
+    const err = new Error('EXPECTED_GRAND_TOTAL_REQUIRED: expectedGrandTotal (the total shown to the customer) is required to place an order.');
+    (err as any).statusCode = 400;
     throw err;
   }
 
@@ -414,7 +422,7 @@ export async function createOrderFromCart(
         }
 
         const qty = Number(item.quantity) || 1;
-        const feePerUnit = item.artworkAssetId ? Number(prod.customizationFee) || 0 : 0;
+        const feePerUnit = customizationFeePerUnit(item, prod);
         const lineTotal = (unitPrice + feePerUnit) * qty;
 
         return {

@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
       customer,
       delivery,
       paymentMethod,
-      expectedGrandTotal: typeof body.expectedGrandTotal === 'number' ? body.expectedGrandTotal : undefined,
+      expectedGrandTotal: body.expectedGrandTotal,
     });
 
     const status = result.isIdempotentReplay ? 200 : 201;

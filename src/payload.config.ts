@@ -1,4 +1,5 @@
 import { buildConfig } from 'payload';
+import { lineHasCustomization, customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
 import { postgresAdapter } from '@payloadcms/db-postgres';
 import { lexicalEditor } from '@payloadcms/richtext-lexical';
 import { ecommercePlugin } from '@payloadcms/plugin-ecommerce';
@@ -792,7 +793,7 @@ export default buildConfig({
                     data.orderStatus = data.orderStatus || 'pending';
                   }
 
-                  const hasCustomization = data.items.some((item: any) => Boolean(item.artworkAssetId || item.printingNotes));
+                  const hasCustomization = data.items.some((item: any) => lineHasCustomization(item));
                   data.proofStatus = hasCustomization ? 'proof_pending' : 'not_required';
 
                   // 5. DEFENSE 2: Resolve prices from Variant priceInEGP or Product priceInEGP (Issue 2)
@@ -826,7 +827,7 @@ export default buildConfig({
                     }
 
                     const qty = Number(item.quantity) || 1;
-                    const feePerUnit = item.artworkAssetId ? (Number(prod.customizationFee) || 0) : 0;
+                    const feePerUnit = customizationFeePerUnit(item, prod);
                     const lineCustomization = feePerUnit * qty;
                     const lineBase = unitPrice * qty;
                     const lineTotal = lineBase + lineCustomization;

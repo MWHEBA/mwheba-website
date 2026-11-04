@@ -1,4 +1,5 @@
 import type { Payload } from 'payload';
+import { customizationFeePerUnit } from '../logic/customizationFee';
 
 export interface HydratedCartItem {
   id: string;
@@ -204,8 +205,7 @@ export async function hydrateCartLines(
     }
 
     // Separate customization fee
-    const hasCustomization = Boolean(raw.artworkAssetId || raw.printingNotes);
-    const feePerUnit = hasCustomization ? (Number(product.customizationFee) || 0) : 0;
+    const feePerUnit = customizationFeePerUnit(raw, product);
     const lineCustomizationFee = feePerUnit * qty;
     const lineSubtotal = unitPrice * qty;
     const lineTotal = lineSubtotal + lineCustomizationFee;

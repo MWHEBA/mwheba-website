@@ -3,6 +3,8 @@
  * Strictly adheres to DECISIONS.md D-009, D-010, D-017, D-018
  */
 
+import { customizationFeePerUnit } from './customizationFee';
+
 export interface ProductItem {
   id: string;
   title: string;
@@ -66,10 +68,7 @@ export function calculateCartState(
     subtotal += product.basePrice * item.quantity;
 
     // Separate customization fee: customization fee * quantity (if printing requested or artwork attached)
-    if (item.artworkAssetId || item.printingNotes) {
-      const feePerUnit = product.customizationFee || 0;
-      totalCustomizationFees += feePerUnit * item.quantity;
-    }
+    totalCustomizationFees += customizationFeePerUnit(item, product) * item.quantity;
   }
 
   // 2. Evaluate MOQ per individual Product ID (No cross-product aggregation)
