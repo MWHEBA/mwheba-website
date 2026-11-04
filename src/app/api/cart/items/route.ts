@@ -63,14 +63,14 @@ async function resolveCart(req: NextRequest, payload: any) {
     // Guest flow
   }
 
-  // Initialize brand new guest cart for this unauthenticated requester
-  const newCart = await getOrCreateCart(payload);
-  return { cart: newCart, isNew: true };
+  // No active session found: mutations reject unauthenticated/uninitialized requests
+  return { cart: null };
 }
 
 /**
  * POST /api/cart/items
  * Adds an item to the persistent cart with mandatory client-generated operationKey.
+ * Strictly requires an existing session (initialized via GET /api/cart/items?init=true).
  */
 export async function POST(req: NextRequest) {
   try {
@@ -107,7 +107,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { cart, isNew } = await resolveCart(req, payload);
+    const { cart } = await resolveCart(req, payload);
+    if (!cart) {
+      return NextResponse.json(
+        {
+          error: 'SESSION_REQUIRED',
+          message: 'Active cart session required. Initialize session via GET /api/cart/items?init=true before adding items.',
+        },
+        { status: 401 }
+      );
+    }
 
     const summary = await addItemToCart(payload, cart.id, {
       productId,
@@ -118,25 +127,13 @@ export async function POST(req: NextRequest) {
       operationKey: operationKey.trim(),
     });
 
-    const response = NextResponse.json({
+    return NextResponse.json({
       success: true,
       cartId: cart.id,
       guestSecret: cart.secret,
       operationKey: operationKey.trim(),
       summary,
     });
-
-    if (isNew) {
-      response.cookies.set(CART_COOKIE_NAME, signCartId(cart.id), {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure: process.env.NODE_ENV === 'production',
-        path: '/',
-        maxAge: 60 * 60 * 24 * 30,
-      });
-    }
-
-    return response;
   } catch (err: any) {
     return NextResponse.json(
       { error: err.message || 'INTERNAL_ERROR' },

@@ -477,14 +477,51 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(body.error).toBe('MISSING_OPERATION_KEY');
     });
 
-    it('proves end-to-end idempotent retry from UI/API down to DB without quantity duplication upon lost response', async () => {
-      // 1. Client generates a deterministic operationKey BEFORE dispatching
-      const clientGeneratedOpKey = generateOperationKey('add');
+    it('strictly rejects direct POST /api/cart/items without an active session cookie, preventing orphaned carts', async () => {
+      const db = (payload.db as any).drizzle;
+      const preCheck = await db.execute(sql`SELECT count(*)::int as count FROM "carts";`);
+      const initialCartsCount = preCheck.rows[0].count;
 
-      // 2. First HTTP Request: Client POSTs to /api/cart/items
-      const initialReq = new NextRequest('http://localhost:3000/api/cart/items', {
+      const unauthenticatedReq = new NextRequest('http://localhost:3000/api/cart/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productId: physicalProductA.id,
+          quantity: 10,
+          operationKey: generateOperationKey('add'),
+        }),
+      });
+
+      const res = await cartItemsPostRoute(unauthenticatedReq);
+      expect(res.status).toBe(401);
+      const body = await res.json();
+      expect(body.error).toBe('SESSION_REQUIRED');
+      expect(body.message).toContain('Active cart session required');
+
+      // Zero carts created in PostgreSQL
+      const postCheck = await db.execute(sql`SELECT count(*)::int as count FROM "carts";`);
+      expect(postCheck.rows[0].count).toBe(initialCartsCount);
+    });
+
+    it('proves end-to-end idempotent retry from UI/API down to DB without quantity duplication upon lost response', async () => {
+      // 1. Client initializes session via GET /api/cart/items?init=true and generates operationKey
+      const initReq = new NextRequest('http://localhost:3000/api/cart/items?init=true', { method: 'GET' });
+      const initRes = await cartItemsGetRoute(initReq);
+      expect(initRes.status).toBe(200);
+      const initData = await initRes.json();
+      const cartId = initData.cartId;
+      createdCartIds.push(cartId);
+      const signedCookie = signCartId(cartId);
+
+      const clientGeneratedOpKey = generateOperationKey('add');
+
+      // 2. First HTTP Request: Client POSTs to /api/cart/items with session cookie
+      const initialReq = new NextRequest('http://localhost:3000/api/cart/items', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `mwheba_cart=${signedCookie}`,
+        },
         body: JSON.stringify({
           productId: physicalProductA.id,
           variantId: variantA1.id,
@@ -498,10 +535,6 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const initialData = await initialRes.json();
       expect(initialData.success).toBe(true);
       expect(initialData.summary.totalItemsCount).toBe(5);
-
-      const cartId = initialData.cartId;
-      createdCartIds.push(cartId);
-      const signedCookie = signCartId(cartId);
 
       // 3. Client Simulates Dropped Network Connection / Response Interruption
       // Re-executes the request reusing the EXACT SAME operationKey and session cookie
@@ -835,7 +868,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         });
 
         let res: any;
-        if (url === '/api/cart/items') {
+        if (url.startsWith('/api/cart/items')) {
           if (method === 'GET') res = await cartItemsGetRoute(req);
           else if (method === 'POST') res = await cartItemsPostRoute(req);
           else if (method === 'PATCH') res = await cartItemsPatchRoute(req);
@@ -1121,6 +1154,98 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       }
     });
 
+    it('halts addItem with a clear error when session initialization fails, and never dispatches POST', async () => {
+      (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+      const window = new Window();
+      const document = window.document;
+      const originalWindow = global.window;
+      const originalDocument = global.document;
+      const originalFetch = global.fetch;
+
+      global.window = window as any;
+      global.document = document as any;
+
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container as any);
+
+      let postAttemptCount = 0;
+      let initAttemptCount = 0;
+
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
+        if (url.includes('/api/cart/items?init=true')) {
+          initAttemptCount++;
+          // Simulate server failure or network drop during session initialization
+          return new Response(
+            JSON.stringify({ error: 'DATABASE_UNAVAILABLE', message: 'Failed to provision session.' }),
+            { status: 503, headers: { 'Content-Type': 'application/json' } }
+          );
+        }
+        if (url.includes('/api/cart/items') && (!init || init.method === 'GET')) {
+          return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        if (url.includes('/api/cart/items') && init?.method === 'POST') {
+          postAttemptCount++;
+          return new Response(JSON.stringify({ success: true }), { status: 200 });
+        }
+        return new Response('Not found', { status: 404 });
+      });
+
+      function InitFailureHarness() {
+        const { addItem, error } = useCart();
+        return React.createElement(
+          'div',
+          null,
+          React.createElement(
+            'button',
+            {
+              id: 'btn-fail-add',
+              onClick: async () => {
+                try {
+                  await addItem({ productId: physicalProductA.id, quantity: 10 });
+                } catch {
+                  // Handled by UI error state
+                }
+              },
+            },
+            'Add'
+          ),
+          React.createElement('div', { id: 'dom-error' }, error || '')
+        );
+      }
+
+      try {
+        await act(async () => {
+          root.render(React.createElement(CartProvider, null, React.createElement(InitFailureHarness)));
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        const btnFailAdd = container.querySelector('#btn-fail-add') as any;
+        await act(async () => {
+          btnFailAdd.click();
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        });
+
+        // 1. Session initialization was attempted
+        expect(initAttemptCount).toBeGreaterThanOrEqual(1);
+
+        // 2. CRITICAL: Zero POST requests were dispatched!
+        expect(postAttemptCount).toBe(0);
+
+        // 3. UI displays clear error
+        const domError = container.querySelector('#dom-error')!;
+        expect(domError.textContent).toContain('Failed to initialize cart session');
+      } finally {
+        await act(async () => {
+          root.unmount();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        global.window = originalWindow;
+        global.document = originalDocument;
+        global.fetch = originalFetch;
+      }
+    });
+
     it('drives cart mutation via executeWithOperationRetry and reuses key on retry to prevent duplicates', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
@@ -1313,29 +1438,22 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         }),
       });
       const resPost = await cartItemsPostRoute(attackerReqPost);
-      expect(resPost.ok).toBe(true);
+      expect(resPost.status).toBe(401);
       const dataPost = await resPost.json();
 
       // SECURITY ASSERTIONS:
-      // a) Attacker MUST NOT receive victim's cartId (receives their own new cart)
-      expect(dataPost.cartId).toBeDefined();
-      expect(dataPost.cartId).not.toBe(victimCart.id);
-      createdCartIds.push(dataPost.cartId);
+      // a) Request is strictly rejected with SESSION_REQUIRED
+      expect(dataPost.error).toBe('SESSION_REQUIRED');
 
-      // b) Attacker MUST NOT receive victim's guest secret
-      expect(dataPost.guestSecret).toBeDefined();
-      expect(dataPost.guestSecret).not.toBe(victimCart.secret);
+      // b) Attacker MUST NOT receive victim's cartId, secret, or data
+      expect(dataPost.cartId).toBeUndefined();
+      expect(dataPost.guestSecret).toBeUndefined();
+      expect(dataPost.summary).toBeUndefined();
 
-      // c) Attacker MUST NOT receive a session cookie for victim's cart
-      const attackerCookieHeader = resPost.headers.get('set-cookie');
-      if (attackerCookieHeader) {
-        expect(attackerCookieHeader).not.toContain(signCartId(victimCart.id));
-      }
+      // c) Attacker MUST NOT receive a session cookie
+      expect(resPost.headers.get('set-cookie')).toBeNull();
 
-      // d) Attacker response summary MUST NOT reveal victim's items
-      expect(dataPost.summary.totalItemsCount).toBe(50); // Attacker's own 50 units, not victim's 25
-
-      // e) Victim's cart in PostgreSQL remains strictly untouched
+      // d) Victim's cart in PostgreSQL remains strictly untouched
       const unchangedVictim = await getCartSummary(payload, victimCart.id);
       expect(unchangedVictim.totalItemsCount).toBe(25);
       expect(unchangedVictim.items[0].quantity).toBe(25);

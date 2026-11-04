@@ -102,29 +102,42 @@ export function CartProvider({ children }: { children: ReactNode }) {
    * Ensures a signed guest session cookie is established BEFORE executing mutations.
    * If a session/cartId is already tracked, returns it immediately.
    * Otherwise, calls GET /api/cart/items?init=true so the server sets the signed cookie.
+   * STOPS immediately with a clear error if session initialization fails.
    */
-  const ensureSession = useCallback(async (): Promise<number | null> => {
+  const ensureSession = useCallback(async (): Promise<number> => {
     if (cartId) return cartId;
+    let res: Response;
     try {
-      const res = await fetch('/api/cart/items?init=true', {
+      res = await fetch('/api/cart/items?init=true', {
         method: 'GET',
         headers: { Accept: 'application/json' },
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.cartId) {
-          setCartId(data.cartId);
-          if (data.summary) {
-            setSummary(data.summary);
-            setItems(data.summary.items || []);
-          }
-          return data.cartId;
-        }
-      }
-    } catch {
-      // In case session pre-initialization fails, let mutation proceed
+    } catch (err: any) {
+      const msg = err?.message || 'Network error initializing cart session';
+      setError(msg);
+      throw new Error(`Failed to initialize cart session: ${msg}`);
     }
-    return null;
+
+    if (!res.ok) {
+      const errBody = await res.json().catch(() => ({}));
+      const msg = errBody.message || errBody.error || `HTTP ${res.status}`;
+      setError(msg);
+      throw new Error(`Failed to initialize cart session: ${msg}`);
+    }
+
+    const data = await res.json();
+    if (!data.cartId) {
+      const msg = 'Missing cartId in session initialization response';
+      setError(msg);
+      throw new Error(`Failed to initialize cart session: ${msg}`);
+    }
+
+    setCartId(data.cartId);
+    if (data.summary) {
+      setSummary(data.summary);
+      setItems(data.summary.items || []);
+    }
+    return data.cartId;
   }, [cartId]);
 
   /**
