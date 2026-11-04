@@ -223,11 +223,55 @@ export async function POST(req: NextRequest) {
           cartUpdated = true;
         });
       } catch (bindErr: any) {
+        // AMBIGUOUS / FAILED UPDATE RECOVERY:
+        // Before deleting the uploaded file or asset record, check PostgreSQL database
+        // to verify whether the cart update actually committed despite the exception.
+        let isActuallyLinked = false;
+        let verificationSucceeded = false;
+
+        try {
+          const verifyCart = await payload.findByID({
+            collection: 'carts',
+            id: sessionCartId,
+            depth: 0,
+          });
+
+          if (verifyCart && Array.isArray(verifyCart.items)) {
+            verificationSucceeded = true;
+            const boundItem = verifyCart.items.find(
+              (item: any) => item.id === lineItemId && String(item.artworkAssetId) === String(asset.id)
+            );
+            if (boundItem) {
+              isActuallyLinked = true;
+            }
+          }
+        } catch (verifyErr: any) {
+          console.warn('Failed to verify cart linkage during upload rollback recovery:', verifyErr?.message);
+        }
+
+        if (isActuallyLinked) {
+          // DATABASE COMMITTED: The line item is already linked to this artwork asset in PostgreSQL.
+          // NEVER delete the file or asset. Safely recover and return HTTP 201 success.
+          return NextResponse.json(
+            {
+              success: true,
+              assetId: asset.id,
+              filename: validation.originalFilename,
+              fileSize: validation.fileSize,
+              mimeType: validation.mimeType,
+              sha256: validation.sha256,
+              storageKey,
+              scanStatus: 'unscanned',
+              boundToLineItem: true,
+              recoveredFromGlitch: true,
+            },
+            { status: 201 }
+          );
+        }
+
         // ROLLBACK SAFETY:
-        // Only delete file and asset if the database cart update did NOT succeed (cartUpdated === false).
-        // If the database update succeeded in PostgreSQL, NEVER delete the file,
-        // because the cart already references it and doing so would create a broken dangling reference.
-        if (!cartUpdated) {
+        // Only delete file and asset if we verified that PostgreSQL does NOT reference this asset.
+        if (verificationSucceeded && !isActuallyLinked) {
           await cleanupUploadedArtwork(storageKey);
           await payload.delete({
             collection: 'artwork-assets',
@@ -235,27 +279,25 @@ export async function POST(req: NextRequest) {
             context: { isTrustedUpload: true },
             overrideAccess: true,
           });
+        }
 
-          if (bindErr.code === 'LINE_ITEM_REMOVED_CONCURRENTLY') {
-            return NextResponse.json(
-              {
-                error: 'LINE_ITEM_NOT_FOUND',
-                message: bindErr.message,
-              },
-              { status: 422 }
-            );
-          }
-
+        if (bindErr.code === 'LINE_ITEM_REMOVED_CONCURRENTLY') {
           return NextResponse.json(
             {
-              error: 'CART_BINDING_FAILED',
-              message: `Failed to bind artwork to cart line item: ${bindErr?.message || 'Database update error'}`,
+              error: 'LINE_ITEM_NOT_FOUND',
+              message: bindErr.message,
             },
-            { status: 500 }
+            { status: 422 }
           );
-        } else {
-          console.warn('Cart update was saved, but post-lock error occurred:', bindErr?.message);
         }
+
+        return NextResponse.json(
+          {
+            error: 'CART_BINDING_FAILED',
+            message: `Failed to bind artwork to cart line item: ${bindErr?.message || 'Database update error'}`,
+          },
+          { status: 500 }
+        );
       }
     }
 

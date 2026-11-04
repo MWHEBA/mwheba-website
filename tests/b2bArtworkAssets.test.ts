@@ -750,6 +750,93 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       });
       expect(orphanAssets.totalDocs).toBe(0);
     });
+
+    it('safely recovers and preserves file and asset if cart DB update succeeded but an error was thrown before response returned', async () => {
+      const glitchCart = await getOrCreateCart(payload);
+      createdCartIds.push(glitchCart.id);
+      const signedCookie = signCartId(glitchCart.id);
+
+      // 1. Add item to cart
+      const addRes = await cartItemsPostRoute(
+        new NextRequest('http://localhost:3000/api/cart/items', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+          },
+          body: JSON.stringify({
+            productId: testProduct.id,
+            quantity: 10,
+            operationKey: `op_glitch_setup_${Date.now()}`,
+          }),
+        })
+      );
+      const addData = await addRes.json();
+      const lineItemId = addData.summary.items[0].id;
+
+      // 2. Intercept payload.update so it performs the real database update on 'carts',
+      // but immediately throws a simulated post-commit network/connection error right before returning!
+      const originalUpdate = payload.update;
+      let interceptedOnce = false;
+
+      payload.update = async function (args: any) {
+        if (args.collection === 'carts' && !interceptedOnce) {
+          interceptedOnce = true;
+          // Execute the real database update first
+          await originalUpdate.call(payload, args);
+          // Now throw a simulated unrecoverable error right after PostgreSQL commit, before response is formed!
+          throw new Error('Unrecoverable post-commit crash before returning');
+        }
+        return originalUpdate.call(payload, args);
+      };
+
+      try {
+        const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="teal" width="30" height="30"/></svg>';
+        const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
+        const formData = new FormData();
+        const filename = `glitch_saved_${Date.now()}.svg`;
+        formData.append('file', blob, filename);
+        formData.append('lineItemId', lineItemId);
+
+        const uploadReq = new NextRequest('http://localhost:3000/api/customization/upload-artwork', {
+          method: 'POST',
+          headers: {
+            Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+          },
+          body: formData,
+        });
+
+        const res = await uploadArtworkRoute(uploadReq);
+        expect(res.status).toBe(201);
+        const data = await res.json();
+        expect(data.success).toBe(true);
+        expect(data.recoveredFromGlitch).toBe(true);
+        createdAssetIds.push(data.assetId);
+
+        // 3. Verify that the file on disk was NOT deleted
+        const absolutePath = resolveArtworkPath(data.storageKey);
+        testFilesToClean.push(absolutePath);
+        expect(existsSync(absolutePath)).toBe(true);
+
+        // 4. Verify that the asset doc in database was NOT deleted
+        const assetDoc = await payload.findByID({
+          collection: 'artwork-assets',
+          id: data.assetId,
+          depth: 0,
+        });
+        expect(assetDoc).toBeDefined();
+
+        // 5. Verify that the cart in PostgreSQL references this asset
+        const dbCart = await payload.findByID({
+          collection: 'carts',
+          id: glitchCart.id,
+          depth: 0,
+        });
+        expect(dbCart.items[0].artworkAssetId).toBe(String(data.assetId));
+      } finally {
+        payload.update = originalUpdate;
+      }
+    });
   });
 
   // =========================================================================
