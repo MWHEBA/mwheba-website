@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useCart } from '../context/CartContext';
 import { sampleProducts } from '@/modules/catalog/data/sampleProducts';
@@ -12,7 +12,9 @@ interface CheckoutViewProps {
 
 export function CheckoutView({ locale }: CheckoutViewProps) {
   const isArabic = locale === 'ar';
-  const { items, calculation, shippingFee, setShippingFee, clearCart } = useCart();
+  const { items, calculation, shippingFee, setShippingFee, resetSession } = useCart();
+  const [quoteReady, setQuoteReady] = useState(false);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
 
   // Form State
   const [companyName, setCompanyName] = useState('');
@@ -39,12 +41,43 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
   const handleDeliveryChange = (method: 'shipping' | 'pickup') => {
     setDeliveryMethod(method);
-    setShippingFee(method === 'shipping' ? 150 : 0);
   };
+
+  // Server-authoritative delivery quote (tariff is provisional until owner approval per D-015)
+  useEffect(() => {
+    if (items.length === 0) return;
+    let cancelled = false;
+    setQuoteReady(false);
+    setQuoteError(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/checkout/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            delivery: { method: deliveryMethod, governorate: deliveryMethod === 'shipping' ? governorate : undefined },
+          }),
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok || !data.success) throw new Error(data.error || 'Quote unavailable');
+        setShippingFee(data.shippingFee);
+        setQuoteReady(true);
+      } catch (err: any) {
+        if (!cancelled) setQuoteError(err.message || 'Quote unavailable');
+      }
+    }, 300);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [deliveryMethod, governorate, items.length, setShippingFee]);
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!calculation.canCheckout) return;
+    if (!calculation.canCheckout || !quoteReady) return;
 
     setIsSubmitting(true);
     setOrderError(null);
@@ -71,6 +104,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
               buildingDetails,
             } : undefined,
             fulfillmentNotes,
+            expectedShippingFee: shippingFee,
           },
           paymentMethod: paymentMethod,
         }),
@@ -83,7 +117,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
       setPlacedOrder(data);
       setIsOrderPlaced(true);
-      clearCart();
+      resetSession();
     } catch (err: any) {
       setOrderError(err.message || 'An unexpected error occurred during checkout');
     } finally {
@@ -384,7 +418,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                         {isArabic ? 'شحن وتوصيل لمقر الشركة' : 'Corporate Courier Delivery'}
                       </span>
                       <span style={{ fontWeight: 700, color: 'var(--brand-primary-dark)' }}>
-                        150 {isArabic ? 'ج.م (تقديري)' : 'EGP (estimate)'}
+                        {isArabic ? 'يُحسب من الخادم' : 'Server quote'}
                       </span>
                     </div>
                     <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
@@ -685,7 +719,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                 <span>{isArabic ? 'رسوم الشحن والتوصيل:' : 'Delivery & Logistics:'}</span>
-                <span>{shippingFee === 0 ? (isArabic ? 'مجاني (استلام مقر)' : 'Free (Pickup)') : `${shippingFee} ${isArabic ? 'ج.م (تقديري مؤقت D-015)' : 'EGP (provisional D-015)'}`}</span>
+                <span>{!quoteReady ? (isArabic ? 'جاري الحساب من الخادم...' : 'Calculating from server...') : shippingFee === 0 ? (isArabic ? 'مجاني (استلام مقر)' : 'Free (Pickup)') : `${shippingFee} ${isArabic ? 'ج.م (تقديري مؤقت D-015)' : 'EGP (provisional D-015)'}`}</span>
               </div>
 
               <div
@@ -700,13 +734,13 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                   marginTop: '0.5rem',
                 }}
               >
-                <span>{isArabic ? 'الإجمالي النهائي المطلوب:' : 'Final Grand Total:'}</span>
+                <span>{isArabic ? 'الإجمالي المقدّر (الشحن مؤقت حتى اعتماد D-015):' : 'Estimated Total (shipping provisional per D-015):'}</span>
                 <span>{calculation.grandTotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
               </div>
             </div>
 
             {/* Error Message Display */}
-            {orderError && (
+            {(orderError || quoteError) && (
               <div
                 style={{
                   marginTop: '1.25rem',
@@ -720,7 +754,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                   lineHeight: 1.5,
                 }}
               >
-                ⚠️ {orderError}
+                ⚠️ {orderError || quoteError}
               </div>
             )}
 
@@ -730,7 +764,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                 variant="primary"
                 size="lg"
                 type="submit"
-                disabled={!calculation.canCheckout}
+                disabled={!calculation.canCheckout || !quoteReady}
                 loading={isSubmitting}
                 loadingText={isArabic ? 'جاري تأكيد وتسجيل الطلب...' : 'Processing Order...'}
                 style={{ width: '100%', fontWeight: 700 }}

@@ -7,6 +7,8 @@ import { CART_COOKIE_NAME, getOrCreateCart } from '@/modules/cart-checkout/servi
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
 import { resolveDeliveryTariff } from '@/modules/orders/services/deliveryTariff';
 import { POST as checkoutRoute } from '@/app/api/checkout/create-order/route';
+import { POST as quoteRoute } from '@/app/api/checkout/quote/route';
+import { GET as cartItemsGet, POST as cartItemsPost } from '@/app/api/cart/items/route';
 
 describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', () => {
   let payload: any;
@@ -1290,6 +1292,237 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         },
       });
       expect(existingOrders.totalDocs).toBe(1);
+    });
+  });
+
+  // =========================================================================
+  // 10. Review fixes: server quote, scoped idempotency, post-purchase session
+  // =========================================================================
+  describe('10. Server quote, scoped idempotency & post-purchase session journey', () => {
+    const customerFor = (tag: string) => ({
+      email: `${tag}_${Date.now()}_${Math.floor(Math.random() * 1e6)}@mwheba.test`,
+      password: 'SecurePassword2026!',
+      companyName: `${tag} Corp`,
+      contactPerson: 'Test Buyer',
+      phone: '+201012345678',
+    });
+
+    const readSetCookie = (res: Response): string | null => {
+      const raw = res.headers.get('set-cookie') || '';
+      const match = raw.match(new RegExp(`${CART_COOKIE_NAME}=[^;]+`));
+      return match ? match[0] : null;
+    };
+
+    const makeCartWithItem = async () => {
+      const cart = await getOrCreateCart(payload);
+      cleanupCartIds.push(cart.id);
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: { items: [{ product: physicalProductA.id, quantity: 10 }] },
+      });
+      return cart;
+    };
+
+    const cookieReq = (url: string, cookie: string | null, method: string, body?: any) =>
+      new NextRequest(url, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(cookie ? { Cookie: cookie } : {}),
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+    it('server quote matches the saved order shipping fee and total; stale or client-set fees are rejected/ignored', async () => {
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+
+      const quoteRes = await quoteRoute(
+        cookieReq('http://localhost:3000/api/checkout/quote', cookie, 'POST', {
+          delivery: { method: 'shipping', governorate: 'Cairo' },
+        })
+      );
+      expect(quoteRes.status).toBe(200);
+      const quote = await quoteRes.json();
+      expect(quote.shippingFee).toBe(80);
+      expect(quote.isProvisional).toBe(true);
+      expect(quote.tariffScheduleStatus).toBe('pending_owner_tariff_approval');
+
+      const shippingAddress = { governorate: 'Cairo', city: 'Maadi', streetAddress: 'Street 9' };
+
+      // Stale displayed fee (e.g. old UI value of 150) must be rejected with 409, no order created
+      const staleRes = await checkoutRoute(
+        cookieReq('http://localhost:3000/api/checkout/create-order', cookie, 'POST', {
+          customer: customerFor('stale'),
+          delivery: { method: 'shipping', shippingAddress, expectedShippingFee: 150 },
+          paymentMethod: 'bank_transfer',
+        })
+      );
+      expect(staleRes.status).toBe(409);
+      expect((await staleRes.json()).error).toContain('SHIPPING_QUOTE_MISMATCH');
+      expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+
+      // Matching quote + client-supplied customFee (ignored) -> saved values equal the quote
+      const okRes = await checkoutRoute(
+        cookieReq('http://localhost:3000/api/checkout/create-order', cookie, 'POST', {
+          customer: customerFor('quoted'),
+          delivery: { method: 'shipping', shippingAddress, expectedShippingFee: quote.shippingFee, customFee: 1 },
+          paymentMethod: 'bank_transfer',
+        })
+      );
+      expect(okRes.status).toBe(201);
+      const ok = await okRes.json();
+      cleanupOrderIds.push(ok.orderId);
+      cleanupUserIds.push(ok.customerId);
+      const saved = await payload.findByID({ collection: 'orders', id: ok.orderId });
+      expect(saved.shippingFee).toBe(quote.shippingFee);
+      expect(Number(ok.total)).toBe(quote.grandTotal);
+    });
+
+    it('does not replay an order for a victim idempotency key presented from a different cart', async () => {
+      const victimCart = await makeCartWithItem();
+      const attackerCart = await makeCartWithItem();
+      const key = `victim_key_${Date.now()}`;
+
+      const victimOrder = await createOrderFromCart(payload, {
+        cartId: victimCart.id,
+        guestSecret: victimCart.secret,
+        idempotencyKey: key,
+        customer: customerFor('victim'),
+        delivery: { method: 'pickup' },
+        paymentMethod: 'bank_transfer',
+      });
+      cleanupOrderIds.push(victimOrder.order.id);
+      cleanupUserIds.push(victimOrder.customerId);
+
+      // Attacker, own valid session, victim's key: must NOT receive the victim's order
+      const attackerOrder = await createOrderFromCart(payload, {
+        cartId: attackerCart.id,
+        guestSecret: attackerCart.secret,
+        idempotencyKey: key,
+        customer: customerFor('attacker'),
+        delivery: { method: 'pickup' },
+        paymentMethod: 'bank_transfer',
+      });
+      cleanupOrderIds.push(attackerOrder.order.id);
+      cleanupUserIds.push(attackerOrder.customerId);
+      expect(attackerOrder.isIdempotentReplay).toBe(false);
+      expect(attackerOrder.order.id).not.toBe(victimOrder.order.id);
+      expect(attackerOrder.orderNumber).not.toBe(victimOrder.orderNumber);
+
+      // Attacker presenting the victim's cart without its secret is forbidden
+      await expect(
+        createOrderFromCart(payload, {
+          cartId: victimCart.id,
+          guestSecret: attackerCart.secret,
+          idempotencyKey: key,
+          customer: customerFor('attacker2'),
+          delivery: { method: 'pickup' },
+          paymentMethod: 'bank_transfer',
+        })
+      ).rejects.toThrowError(/FORBIDDEN_CART_ACCESS/);
+
+      // Same cart + same key still replays for the legitimate owner
+      const replay = await createOrderFromCart(payload, {
+        cartId: victimCart.id,
+        guestSecret: victimCart.secret,
+        idempotencyKey: key,
+        customer: customerFor('victim'),
+        delivery: { method: 'pickup' },
+        paymentMethod: 'bank_transfer',
+      });
+      expect(replay.isIdempotentReplay).toBe(true);
+      expect(replay.order.id).toBe(victimOrder.order.id);
+
+      // Same cart, different key: no replay (cart is already purchased and empty)
+      await expect(
+        createOrderFromCart(payload, {
+          cartId: victimCart.id,
+          guestSecret: victimCart.secret,
+          idempotencyKey: `${key}_other`,
+          customer: customerFor('victim'),
+          delivery: { method: 'pickup' },
+          paymentMethod: 'bank_transfer',
+        })
+      ).rejects.toThrowError(/EMPTY_CART/);
+    });
+
+    it('lets a guest start a second independent order after a completed purchase (cookie still points to purchased cart)', async () => {
+      // 1. Initialise a guest session
+      const initRes = await cartItemsGet(cookieReq('http://localhost:3000/api/cart/items?init=true', null, 'GET'));
+      const init = await initRes.json();
+      const cookie1 = readSetCookie(initRes as any);
+      expect(cookie1).toBeTruthy();
+      cleanupCartIds.push(init.cartId);
+
+      // 2. Add an item and place the first order
+      const add1 = await cartItemsPost(
+        cookieReq('http://localhost:3000/api/cart/items', cookie1, 'POST', {
+          productId: physicalProductA.id,
+          quantity: 10,
+          operationKey: `journey_add_1_${Date.now()}`,
+        })
+      );
+      expect(add1.status).toBe(200);
+
+      const order1Res = await checkoutRoute(
+        cookieReq('http://localhost:3000/api/checkout/create-order', cookie1, 'POST', {
+          customer: customerFor('journey1'),
+          delivery: { method: 'pickup' },
+          paymentMethod: 'bank_transfer',
+        })
+      );
+      expect(order1Res.status).toBe(201);
+      const order1 = await order1Res.json();
+      cleanupOrderIds.push(order1.orderId);
+      cleanupUserIds.push(order1.customerId);
+
+      // 3. Stale cookie must not be treated as a valid session; adding with it is refused
+      const staleAdd = await cartItemsPost(
+        cookieReq('http://localhost:3000/api/cart/items', cookie1, 'POST', {
+          productId: physicalProductA.id,
+          quantity: 10,
+          operationKey: `journey_stale_${Date.now()}`,
+        })
+      );
+      expect(staleAdd.status).toBeGreaterThanOrEqual(400);
+
+      // 4. GET ?init=true with the stale cookie bootstraps a NEW cart and cookie
+      const reinitRes = await cartItemsGet(cookieReq('http://localhost:3000/api/cart/items?init=true', cookie1, 'GET'));
+      const reinit = await reinitRes.json();
+      const cookie2 = readSetCookie(reinitRes as any);
+      expect(reinit.cartId).toBeDefined();
+      expect(reinit.cartId).not.toBe(init.cartId);
+      expect(cookie2).toBeTruthy();
+      expect(cookie2).not.toBe(cookie1);
+      cleanupCartIds.push(reinit.cartId);
+
+      // 5. Add a new product and place an independent second order
+      const add2 = await cartItemsPost(
+        cookieReq('http://localhost:3000/api/cart/items', cookie2, 'POST', {
+          productId: physicalProductA.id,
+          quantity: 10,
+          operationKey: `journey_add_2_${Date.now()}`,
+        })
+      );
+      expect(add2.status).toBe(200);
+
+      const order2Res = await checkoutRoute(
+        cookieReq('http://localhost:3000/api/checkout/create-order', cookie2, 'POST', {
+          customer: customerFor('journey2'),
+          delivery: { method: 'pickup' },
+          paymentMethod: 'bank_transfer',
+        })
+      );
+      expect(order2Res.status).toBe(201);
+      const order2 = await order2Res.json();
+      cleanupOrderIds.push(order2.orderId);
+      cleanupUserIds.push(order2.customerId);
+
+      expect(order2.isIdempotentReplay).toBe(false);
+      expect(order2.orderId).not.toBe(order1.orderId);
+      expect(order2.orderNumber).not.toBe(order1.orderNumber);
     });
   });
 });

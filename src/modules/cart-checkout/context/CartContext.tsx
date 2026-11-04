@@ -49,6 +49,8 @@ export interface CartContextValue {
   setQuantity: (id: string, quantity: number) => Promise<void>;
   removeItem: (id: string) => Promise<void>;
   clearCart: () => Promise<void>;
+  /** Drops local session state after a completed order so the next add starts a fresh server session. */
+  resetSession: () => void;
   setShippingFee: (fee: number) => void;
 }
 
@@ -78,6 +80,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
         const data = await res.json();
         if (data.cartId) {
           setCartId(data.cartId);
+        } else {
+          setCartId(null);
         }
         if (data.summary) {
           setSummary(data.summary);
@@ -345,6 +349,18 @@ export function CartProvider({ children }: { children: ReactNode }) {
   );
 
   /**
+   * Resets client session state after a purchased cart. The server cookie still points to the
+   * purchased cart, which GET ?init=true treats as invalid and replaces with a new cart.
+   */
+  const resetSession = useCallback(() => {
+    setCartId(null);
+    setItems([]);
+    setSummary(null);
+    setShippingFee(0);
+    setError(null);
+  }, []);
+
+  /**
    * Clears the persistent cart completely with idempotent retry.
    */
   const clearCart = useCallback(async () => {
@@ -463,7 +479,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setQuantity,
     removeItem,
     clearCart,
-    setShippingFee,
+    resetSession,    setShippingFee,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

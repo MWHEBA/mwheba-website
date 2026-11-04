@@ -26,7 +26,8 @@ export interface CreateOrderDeliveryInput {
     buildingDetails?: string;
   };
   fulfillmentNotes?: string;
-  customFee?: number;
+  /** Shipping fee the customer was shown (from the server quote). Rejected with 409 if it differs from the server tariff. */
+  expectedShippingFee?: number;
 }
 
 export interface CreateOrderFromCartInput {
@@ -123,9 +124,8 @@ export async function createOrderFromCart(
     // 3. AMBIGUOUS COMMIT / LOST RESPONSE RECOVERY (Idempotent Retry)
     // If the transaction committed and the response was lost, the client retry with the same cart/key
     // should return the existing order rather than failing on an empty cart.
-    const searchConditions: any[] = [
-      { cart: { equals: cartId } },
-    ];
+    // Replay is scoped to the SAME cart AND the SAME key. A key belonging to another cart never matches.
+    const searchConditions: any[] = [{ cart: { equals: cartId } }];
     if (idempotencyKey) {
       searchConditions.push({ idempotencyKey: { equals: idempotencyKey } });
     }
@@ -133,7 +133,7 @@ export async function createOrderFromCart(
     const existingOrders = await payload.find({
       collection: 'orders',
       where: {
-        or: searchConditions,
+        and: searchConditions,
       },
       sort: '-createdAt',
       limit: 1,
@@ -435,8 +435,13 @@ export async function createOrderFromCart(
       const tariffQuote = resolveDeliveryTariff({
         method: delivery.method,
         governorate: delivery.shippingAddress?.governorate,
-        customFee: delivery.customFee,
       });
+
+      if (typeof delivery.expectedShippingFee === 'number' && delivery.expectedShippingFee !== tariffQuote.amount) {
+        const err = new Error(`SHIPPING_QUOTE_MISMATCH: Displayed shipping fee (${delivery.expectedShippingFee}) differs from the current server quote (${tariffQuote.amount}). Please review the updated total.`);
+        (err as any).statusCode = 409;
+        throw err;
+      }
 
       const shippingFee = tariffQuote.amount;
       const fulfillmentNotes = delivery.method === 'pickup'

@@ -316,7 +316,16 @@ export async function GET(req: NextRequest) {
 
     if (!cartId) {
       const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
-      cartId = readCartId(cookieVal);
+      const cookieCartId = readCartId(cookieVal);
+      if (cookieCartId) {
+        // A cookie pointing to a purchased or missing cart is NOT a valid session.
+        const cookieCart = await payload
+          .findByID({ collection: 'carts', id: cookieCartId, depth: 0 })
+          .catch(() => null);
+        if (cookieCart && !cookieCart.purchasedAt) {
+          cartId = cookieCartId;
+        }
+      }
     }
 
     if (!cartId) {
