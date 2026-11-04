@@ -154,6 +154,37 @@ export const PortfolioProjects: CollectionConfig = {
       label: 'Case Study Narrative Story & Strategic Execution',
     },
     {
+      name: 'sourceOrigin',
+      type: 'select',
+      defaultValue: 'case_study_draft_pending_owner_data',
+      options: [
+        { label: 'شعار عميل موثق + مسودة دراسة حالة قيد اعتماد المالك (Draft Pending Owner Data)', value: 'case_study_draft_pending_owner_data' },
+        { label: 'دراسة حالة حقيقية معتمدة بأرقام موثقة (Verified & Documented Case Study)', value: 'verified_case_study' },
+      ],
+      admin: {
+        description: 'مصدر دراسة الحالة والتحقق من واقعية الأرقام والمخرجات.',
+      },
+    },
+    {
+      name: 'sourceReference',
+      type: 'text',
+      admin: {
+        description: 'مرجع التدقيق (مثال: docs/audit/03-content-and-media-audit.md: Section 3.C).',
+      },
+    },
+    {
+      name: 'approvalStatus',
+      type: 'select',
+      defaultValue: 'pending_case_study_data',
+      options: [
+        { label: 'معلق بانتظار أرقام وموافقة المالك (Pending Stakeholder Data)', value: 'pending_case_study_data' },
+        { label: 'معتمد للنشر (Approved for Publishing)', value: 'approved_for_publishing' },
+      ],
+      admin: {
+        description: 'حالة الاعتماد قبل النشر.',
+      },
+    },
+    {
       name: 'gallery',
       type: 'array',
       localized: true,

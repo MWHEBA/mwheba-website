@@ -246,6 +246,18 @@ export interface Page {
    * URL identifier for this page. Use "home" for the landing page.
    */
   slug: string;
+  /**
+   * مصدر محتوى الصفحة ومرجعية التدقيق.
+   */
+  sourceOrigin?: ('legacy_site_audit_verified' | 'new_draft_page') | null;
+  /**
+   * مرجع التوثيق من تقرير تدقيق المحتوى.
+   */
+  sourceReference?: string | null;
+  /**
+   * حالة الاعتماد التحريري للمحتوى.
+   */
+  approvalStatus?: ('verified_from_v1' | 'pending_owner_review') | null;
   layout?:
     | (
         | {
@@ -439,6 +451,18 @@ export interface PortfolioProject {
       }[]
     | null;
   narrative?: string | null;
+  /**
+   * مصدر دراسة الحالة والتحقق من واقعية الأرقام والمخرجات.
+   */
+  sourceOrigin?: ('case_study_draft_pending_owner_data' | 'verified_case_study') | null;
+  /**
+   * مرجع التدقيق (مثال: docs/audit/03-content-and-media-audit.md: Section 3.C).
+   */
+  sourceReference?: string | null;
+  /**
+   * حالة الاعتماد قبل النشر.
+   */
+  approvalStatus?: ('pending_case_study_data' | 'approved_for_publishing') | null;
   gallery?:
     | {
         image?: (number | null) | Media;
@@ -475,6 +499,18 @@ export interface BlogPost {
         id?: string | null;
       }[]
     | null;
+  /**
+   * مصدر المادة التحريرية وسند توثيقها.
+   */
+  sourceOrigin?: ('editorial_review_draft' | 'legacy_migrated') | null;
+  /**
+   * رقم وثيقة التدقيق أو مستند المصدر المعتمد.
+   */
+  sourceReference?: string | null;
+  /**
+   * حالة الاعتماد التحريري قبل النشر النهائي.
+   */
+  approvalStatus?: ('pending_editorial_review' | 'approved_for_publishing') | null;
   meta?: {
     title?: string | null;
     description?: string | null;
@@ -1499,6 +1535,9 @@ export interface UsersSelect<T extends boolean = true> {
 export interface PagesSelect<T extends boolean = true> {
   title?: T;
   slug?: T;
+  sourceOrigin?: T;
+  sourceReference?: T;
+  approvalStatus?: T;
   layout?:
     | T
     | {
@@ -1688,6 +1727,9 @@ export interface PortfolioProjectsSelect<T extends boolean = true> {
         id?: T;
       };
   narrative?: T;
+  sourceOrigin?: T;
+  sourceReference?: T;
+  approvalStatus?: T;
   gallery?:
     | T
     | {
@@ -1723,6 +1765,9 @@ export interface BlogPostsSelect<T extends boolean = true> {
         tag?: T;
         id?: T;
       };
+  sourceOrigin?: T;
+  sourceReference?: T;
+  approvalStatus?: T;
   meta?:
     | T
     | {

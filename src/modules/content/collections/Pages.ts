@@ -56,6 +56,37 @@ export const Pages: CollectionConfig = {
       },
     },
     {
+      name: 'sourceOrigin',
+      type: 'select',
+      defaultValue: 'legacy_site_audit_verified',
+      options: [
+        { label: 'نصوص معتمدة وموثقة من تدقيق الموقع السابق (Legacy Site Audit Verified)', value: 'legacy_site_audit_verified' },
+        { label: 'مسودة صفحة جديدة قيد المراجعة (New Draft Page)', value: 'new_draft_page' },
+      ],
+      admin: {
+        description: 'مصدر محتوى الصفحة ومرجعية التدقيق.',
+      },
+    },
+    {
+      name: 'sourceReference',
+      type: 'text',
+      admin: {
+        description: 'مرجع التوثيق من تقرير تدقيق المحتوى.',
+      },
+    },
+    {
+      name: 'approvalStatus',
+      type: 'select',
+      defaultValue: 'verified_from_v1',
+      options: [
+        { label: 'موثق ومعتمد من نصوص الوكالة السابقة (Verified from v1)', value: 'verified_from_v1' },
+        { label: 'قيد مراجعة المالك (Pending Owner Review)', value: 'pending_owner_review' },
+      ],
+      admin: {
+        description: 'حالة الاعتماد التحريري للمحتوى.',
+      },
+    },
+    {
       name: 'layout',
       type: 'blocks',
       localized: true,

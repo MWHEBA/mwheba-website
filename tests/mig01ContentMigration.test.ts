@@ -127,6 +127,7 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
           collection: 'blog-posts',
           where: { slug: { equals: expected.slug } },
           locale: 'ar',
+          draft: true,
           limit: 1,
           overrideAccess: true,
         });
@@ -135,7 +136,10 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
         const doc = arPost.docs[0];
         cleanup.posts.push(doc.id);
 
-        expect(doc._status).toBe('published');
+        // Strict Rule: Blog proposals MUST BE draft status pending editorial review
+        expect(doc._status).toBe('draft');
+        expect(doc.sourceOrigin).toBe('editorial_review_draft');
+        expect(doc.approvalStatus).toBe('pending_editorial_review');
         expect(doc.title).toBe(expected.ar.title);
         expect(doc.category).toBe(expected.category);
         expect(doc.readingTimeMinutes).toBe(expected.readingTimeMinutes);
@@ -148,6 +152,7 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
           collection: 'blog-posts',
           where: { slug: { equals: expected.slug } },
           locale: 'en',
+          draft: true,
           limit: 1,
           overrideAccess: true,
         });
@@ -168,6 +173,7 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
 
       const allPosts = await payload.find({
         collection: 'blog-posts',
+        draft: true,
         limit: 100,
         overrideAccess: true,
       });
@@ -192,6 +198,7 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
           collection: 'portfolio-projects',
           where: { slug: { equals: expected.slug } },
           locale: 'ar',
+          draft: true,
           limit: 1,
           overrideAccess: true,
         });
@@ -200,14 +207,18 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
         const doc = arProject.docs[0];
         cleanup.projects.push(doc.id);
 
-        expect(doc._status).toBe('published');
+        // Strict Rule: Unverified case studies MUST BE draft status pending owner data
+        expect(doc._status).toBe('draft');
+        expect(doc.sourceOrigin).toBe('case_study_draft_pending_owner_data');
+        expect(doc.approvalStatus).toBe('pending_case_study_data');
         expect(doc.title).toBe(expected.ar.title);
         expect(doc.clientName).toBe(expected.ar.clientName);
         expect(doc.industry).toBe(expected.ar.industry);
         expect(doc.serviceCategory).toBe(expected.serviceCategory);
         expect(doc.projectDate).toBe(String(expected.year));
         expect(Array.isArray(doc.deliverables)).toBe(true);
-        expect(Array.isArray(doc.results)).toBe(true);
+        // Strict Rule: Zero fabricated numbers or invented statistics
+        expect(doc.results == null || doc.results.length === 0).toBe(true);
         expect(doc.coverImageAlt).toBe(expected.ar.coverImageAlt);
         expect(doc.deliverables.length).toBe(expected.ar.deliverables.length);
 
@@ -216,6 +227,7 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
           collection: 'portfolio-projects',
           where: { slug: { equals: expected.slug } },
           locale: 'en',
+          draft: true,
           limit: 1,
           overrideAccess: true,
         });
@@ -236,6 +248,7 @@ describe('MIG-01: Content Transformation & Ingestion Pipeline', () => {
 
       const allProjects = await payload.find({
         collection: 'portfolio-projects',
+        draft: true,
         limit: 100,
         overrideAccess: true,
       });

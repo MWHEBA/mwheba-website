@@ -4,6 +4,7 @@ import * as migration_20261104_120000_b2b05_creative_role_and_unique_brief from 
 import * as migration_20261104_130000_b2b06_commerce_settings_and_policy from './20261104_130000_b2b06_commerce_settings_and_policy';
 import * as migration_20261104_140000_pay03_bank_transfer_settings from './20261104_140000_pay03_bank_transfer_settings';
 import * as migration_20261104_150000_pay05_financial_ledger_and_tax from './20261104_150000_pay05_financial_ledger_and_tax';
+import * as migration_20261104_210000_mig01_content_provenance_and_approval from './20261104_210000_mig01_content_provenance_and_approval';
 import * as migration_20261103_013844_add_categories from './20261103_013844_add_categories';
 import * as migration_20261103_035158_add_localized_pages_and_blocks from './20261103_035158_add_localized_pages_and_blocks';
 import * as migration_20261103_042157_add_navigation_global from './20261103_042157_add_navigation_global';
@@ -113,5 +114,10 @@ export const migrations = [
     up: migration_20261104_150000_pay05_financial_ledger_and_tax.up,
     down: migration_20261104_150000_pay05_financial_ledger_and_tax.down,
     name: '20261104_150000_pay05_financial_ledger_and_tax',
+  },
+  {
+    up: migration_20261104_210000_mig01_content_provenance_and_approval.up,
+    down: migration_20261104_210000_mig01_content_provenance_and_approval.down,
+    name: '20261104_210000_mig01_content_provenance_and_approval',
   },
 ];

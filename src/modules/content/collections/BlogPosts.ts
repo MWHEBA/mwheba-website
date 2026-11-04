@@ -130,6 +130,37 @@ export const BlogPosts: CollectionConfig = {
       ],
     },
     {
+      name: 'sourceOrigin',
+      type: 'select',
+      defaultValue: 'editorial_review_draft',
+      options: [
+        { label: 'مسودة تحريرية مقترحة للمراجعة (Editorial Proposal Draft)', value: 'editorial_review_draft' },
+        { label: 'محتوى مُرحّل موثق من الموقع السابق (Legacy Migrated Content)', value: 'legacy_migrated' },
+      ],
+      admin: {
+        description: 'مصدر المادة التحريرية وسند توثيقها.',
+      },
+    },
+    {
+      name: 'sourceReference',
+      type: 'text',
+      admin: {
+        description: 'رقم وثيقة التدقيق أو مستند المصدر المعتمد.',
+      },
+    },
+    {
+      name: 'approvalStatus',
+      type: 'select',
+      defaultValue: 'pending_editorial_review',
+      options: [
+        { label: 'قيد مراجعة المالك وهيئة التحرير (Pending Editorial Review)', value: 'pending_editorial_review' },
+        { label: 'معتمد للنشر (Approved for Publishing)', value: 'approved_for_publishing' },
+      ],
+      admin: {
+        description: 'حالة الاعتماد التحريري قبل النشر النهائي.',
+      },
+    },
+    {
       name: 'meta',
       type: 'group',
       label: 'SEO Overrides',

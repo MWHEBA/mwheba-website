@@ -89,6 +89,9 @@ export async function importServices(payload: Payload): Promise<MigrationSummary
         locale: 'ar',
         data: {
           title: item.ar.title,
+          sourceOrigin: item.sourceOrigin,
+          sourceReference: item.sourceReference,
+          approvalStatus: item.approvalStatus,
           layout: arabicBlocks as any,
           meta: {
             title: `${item.ar.title} | وكالة موهبة`,
@@ -106,6 +109,9 @@ export async function importServices(payload: Payload): Promise<MigrationSummary
         locale: 'en',
         data: {
           title: item.en.title,
+          sourceOrigin: item.sourceOrigin,
+          sourceReference: item.sourceReference,
+          approvalStatus: item.approvalStatus,
           layout: englishBlocks as any,
           meta: {
             title: `${item.en.title} | MWHEBA Agency`,
@@ -126,6 +132,9 @@ export async function importServices(payload: Payload): Promise<MigrationSummary
         data: {
           title: item.ar.title,
           slug: pageSlug,
+          sourceOrigin: item.sourceOrigin,
+          sourceReference: item.sourceReference,
+          approvalStatus: item.approvalStatus,
           layout: arabicBlocks as any,
           meta: {
             title: `${item.ar.title} | وكالة موهبة`,
@@ -143,6 +152,9 @@ export async function importServices(payload: Payload): Promise<MigrationSummary
         locale: 'en',
         data: {
           title: item.en.title,
+          sourceOrigin: item.sourceOrigin,
+          sourceReference: item.sourceReference,
+          approvalStatus: item.approvalStatus,
           layout: englishBlocks as any,
           meta: {
             title: `${item.en.title} | MWHEBA Agency`,

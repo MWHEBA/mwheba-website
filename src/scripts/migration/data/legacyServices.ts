@@ -6,6 +6,9 @@
 export interface LegacyServiceItem {
   slug: string;
   category: string;
+  sourceOrigin: 'legacy_site_audit_verified';
+  sourceReference: string;
+  approvalStatus: 'verified_from_v1';
   ar: {
     title: string;
     subtitle: string;
@@ -28,6 +31,9 @@ export const legacyServicesData: LegacyServiceItem[] = [
   {
     slug: 'brand-identity',
     category: 'branding',
+    sourceOrigin: 'legacy_site_audit_verified',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 2.A Core Services Copy (#5 Brand Identity)',
+    approvalStatus: 'verified_from_v1',
     ar: {
       title: 'هوية العلامة التجارية',
       subtitle: 'بناء وتطوير الهويات المؤسسية المتكاملة للشركات والجهات الكبرى',
@@ -62,6 +68,9 @@ export const legacyServicesData: LegacyServiceItem[] = [
   {
     slug: 'web-development',
     category: 'technology',
+    sourceOrigin: 'legacy_site_audit_verified',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 2.A Core Services Copy (#3 Web Development)',
+    approvalStatus: 'verified_from_v1',
     ar: {
       title: 'تطوير المواقع وتطبيقات الويب',
       subtitle: 'حلول برمجية مخصصة وعالية الأداء ترتكز على أحدث تقنيات الويب',
@@ -96,6 +105,9 @@ export const legacyServicesData: LegacyServiceItem[] = [
   {
     slug: 'ui-ux-design',
     category: 'design',
+    sourceOrigin: 'legacy_site_audit_verified',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 2.A Core Services Copy (#1 UI/UX Design)',
+    approvalStatus: 'verified_from_v1',
     ar: {
       title: 'تصميم واجهة وتجربة المستخدم (UI/UX)',
       subtitle: 'تصميم مسارات تفاعلية تركز على سلوك المستخدم وتحقيق أهداف العمل',
@@ -130,6 +142,9 @@ export const legacyServicesData: LegacyServiceItem[] = [
   {
     slug: 'digital-marketing',
     category: 'marketing',
+    sourceOrigin: 'legacy_site_audit_verified',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 2.A Core Services Copy (#4 Digital Marketing)',
+    approvalStatus: 'verified_from_v1',
     ar: {
       title: 'التسويق الرقمي واستراتيجيات النمو',
       subtitle: 'إدارة الحملات الإعلانية الموجهة وتحقيق أعلى عائد على الاستثمار',
@@ -164,6 +179,9 @@ export const legacyServicesData: LegacyServiceItem[] = [
   {
     slug: 'media-production',
     category: 'media',
+    sourceOrigin: 'legacy_site_audit_verified',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 2.A Core Services Copy (#2 Media Production)',
+    approvalStatus: 'verified_from_v1',
     ar: {
       title: 'الإنتاج الإعلامي والمرئي',
       subtitle: 'تصوير احترافي وإنتاج سينمائي يوثق قصص نجاح العلامات التجارية',
@@ -198,6 +216,9 @@ export const legacyServicesData: LegacyServiceItem[] = [
   {
     slug: 'printing',
     category: 'printing',
+    sourceOrigin: 'legacy_site_audit_verified',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 2.A Core Services Copy (#6 Printing & Giveaways)',
+    approvalStatus: 'verified_from_v1',
     ar: {
       title: 'الطباعة التجارية والهدايا المؤسسية',
       subtitle: 'حلول طباعة متقدمة وهدايا دعائية راقية تليق بكبرى المؤسسات',

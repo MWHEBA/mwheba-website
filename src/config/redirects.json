@@ -1,0 +1,542 @@
+[
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/تطوير-المواقع/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/%D8%AA%D8%B7%D9%88%D9%8A%D8%B1-%D8%A7%D9%84%D9%85%D9%88%D8%A7%D9%82%D8%B9/",
+    "targetUrl": "https://mwheba.com/ar/services/web-development",
+    "targetPath": "/ar/services/web-development",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/تصميم-واجهة-المستخدم/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/%D8%AA%D8%B5%D9%85%D9%8A%D9%85-%D9%88%D8%A7%D8%AC%D9%87%D8%A9-%D8%A7%D9%84%D9%85%D8%B3%D8%AA%D8%AE%D8%AF%D9%85/",
+    "targetUrl": "https://mwheba.com/ar/services/ui-ux-design",
+    "targetPath": "/ar/services/ui-ux-design",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/الطباعة/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/%D8%A7%D9%84%D8%B7%D8%A8%D8%A7%D8%B9%D8%A9/",
+    "targetUrl": "https://mwheba.com/ar/services/printing",
+    "targetPath": "/ar/services/printing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/إنتاج-الوسائط/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/%D8%A5%D9%86%D8%AA%D8%A7%D8%AC-%D8%A7%D9%84%D9%88%D8%B3%D8%A7%D8%A6%D8%B7/",
+    "targetUrl": "https://mwheba.com/ar/services/media-production",
+    "targetPath": "/ar/services/media-production",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/التسويق-الرقمي/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/%D8%A7%D9%84%D8%AA%D8%B3%D9%88%D9%8A%D9%82-%D8%A7%D9%84%D8%B1%D9%82%D9%85%D9%8A/",
+    "targetUrl": "https://mwheba.com/ar/services/digital-marketing",
+    "targetPath": "/ar/services/digital-marketing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/هوية-العلامة-التجارية/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/%D9%87%D9%88%D9%8A%D8%A9-%D8%A7%D9%84%D8%B9%D9%84%D8%A7%D9%85%D8%A9-%D8%A7%D9%84%D8%AA%D8%AC%D8%A7%D8%B1%D9%8A%D8%A9/",
+    "targetUrl": "https://mwheba.com/ar/services/brand-identity",
+    "targetPath": "/ar/services/brand-identity",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/خدماتنا/",
+    "sourcePath": "/ar/%D8%AE%D8%AF%D9%85%D8%A7%D8%AA%D9%86%D8%A7/",
+    "targetUrl": "https://mwheba.com/ar/services",
+    "targetPath": "/ar/services",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Hub",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/الاسترداد-والإرجاع/",
+    "sourcePath": "/ar/%D8%A7%D9%84%D8%A7%D8%B3%D8%AA%D8%B1%D8%AF%D8%A7%D8%AF-%D9%88%D8%A7%D9%84%D8%A5%D8%B1%D8%AC%D8%A7%D8%B9/",
+    "targetUrl": "https://mwheba.com/ar/refund-policy",
+    "targetPath": "/ar/refund-policy",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Legal Document",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/سياسة-الخصوصية/",
+    "sourcePath": "/ar/%D8%B3%D9%8A%D8%A7%D8%B3%D8%A9-%D8%A7%D9%84%D8%AE%D8%B5%D9%88%D8%B5%D9%8A%D8%A9/",
+    "targetUrl": "https://mwheba.com/ar/privacy-policy",
+    "targetPath": "/ar/privacy-policy",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Legal Document",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/مشاريعنا/",
+    "sourcePath": "/ar/%D9%85%D8%B4%D8%A7%D8%B1%D9%8A%D8%B9%D9%86%D8%A7/",
+    "targetUrl": "https://mwheba.com/ar/portfolio",
+    "targetPath": "/ar/portfolio",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Portfolio Hub",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/",
+    "sourcePath": "/ar/",
+    "targetUrl": "https://mwheba.com/ar",
+    "targetPath": "/ar",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Core Homepage",
+    "notes": "Trailing slash normalized to clean non-trailing-slash Arabic homepage route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/تواصل-معنا/",
+    "sourcePath": "/ar/%D8%AA%D9%88%D8%A7%D8%B5%D9%84-%D9%85%D8%B9%D9%86%D8%A7/",
+    "targetUrl": "https://mwheba.com/ar/contact",
+    "targetPath": "/ar/contact",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Corporate Page",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/الوظائف/",
+    "sourcePath": "/ar/%D8%A7%D9%84%D9%88%D8%B8%D8%A7%D8%A6%D9%81/",
+    "targetUrl": "https://mwheba.com/ar/careers",
+    "targetPath": "/ar/careers",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Corporate Page",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/المدونة/",
+    "sourcePath": "/ar/%D8%A7%D9%84%D9%85%D8%AF%D9%88%D9%86%D8%A9/",
+    "targetUrl": "https://mwheba.com/ar/blog",
+    "targetPath": "/ar/blog",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Blog Archive",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/ar/عن-موهبة/",
+    "sourcePath": "/ar/%D8%B9%D9%86-%D9%85%D9%88%D9%87%D8%A8%D8%A9/",
+    "targetUrl": "https://mwheba.com/ar/about",
+    "targetPath": "/ar/about",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Corporate Page",
+    "notes": "Provisional target; Arabic slug normalized to clean Latin route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/refund_returns/",
+    "sourcePath": "/refund_returns/",
+    "targetUrl": "https://mwheba.com/en/refund-policy",
+    "targetPath": "/en/refund-policy",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Legal Document",
+    "notes": "Provisional target; slug normalized from underscore refund_returns"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/my-account/",
+    "sourcePath": "/my-account/",
+    "targetUrl": "https://mwheba.com/en/my-account",
+    "targetPath": "/en/my-account",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Commerce Route",
+    "notes": "WooCommerce legacy my-account redirected to Next.js commerce route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/checkout/",
+    "sourcePath": "/checkout/",
+    "targetUrl": "https://mwheba.com/en/checkout",
+    "targetPath": "/en/checkout",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Commerce Route",
+    "notes": "WooCommerce legacy checkout redirected to Next.js commerce route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/cart/",
+    "sourcePath": "/cart/",
+    "targetUrl": "https://mwheba.com/en/cart",
+    "targetPath": "/en/cart",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Commerce Route",
+    "notes": "WooCommerce legacy cart redirected to Next.js commerce route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/shop/",
+    "sourcePath": "/shop/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Commerce Route",
+    "notes": "WooCommerce legacy shop redirected to Next.js commerce route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/ui-ux-design/",
+    "sourcePath": "/services/ui-ux-design/",
+    "targetUrl": "https://mwheba.com/en/services/ui-ux-design",
+    "targetPath": "/en/services/ui-ux-design",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/media-production/",
+    "sourcePath": "/services/media-production/",
+    "targetUrl": "https://mwheba.com/en/services/media-production",
+    "targetPath": "/en/services/media-production",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/web-development/",
+    "sourcePath": "/services/web-development/",
+    "targetUrl": "https://mwheba.com/en/services/web-development",
+    "targetPath": "/en/services/web-development",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/digital-marketing/",
+    "sourcePath": "/services/digital-marketing/",
+    "targetUrl": "https://mwheba.com/en/services/digital-marketing",
+    "targetPath": "/en/services/digital-marketing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/brand-identity/",
+    "sourcePath": "/services/brand-identity/",
+    "targetUrl": "https://mwheba.com/en/services/brand-identity",
+    "targetPath": "/en/services/brand-identity",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/",
+    "sourcePath": "/",
+    "targetUrl": "https://mwheba.com/",
+    "targetPath": "/",
+    "action": "PRESERVE",
+    "statusCode": 200,
+    "routeType": "Core Homepage",
+    "notes": "Canonical domain root; serves localized English layout"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/",
+    "sourcePath": "/services/",
+    "targetUrl": "https://mwheba.com/en/services",
+    "targetPath": "/en/services",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Hub",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/our-projects/",
+    "sourcePath": "/our-projects/",
+    "targetUrl": "https://mwheba.com/en/portfolio",
+    "targetPath": "/en/portfolio",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Portfolio Hub",
+    "notes": "Provisional target; normalized from our-projects to portfolio"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/pricing/",
+    "sourcePath": "/pricing/",
+    "targetUrl": "https://mwheba.com/en/pricing",
+    "targetPath": "/en/pricing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Pricing",
+    "notes": "Provisional target; fixed-price services catalog"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/blog/",
+    "sourcePath": "/blog/",
+    "targetUrl": "https://mwheba.com/en/blog",
+    "targetPath": "/en/blog",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Blog Archive",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/contact-us/",
+    "sourcePath": "/contact-us/",
+    "targetUrl": "https://mwheba.com/en/contact",
+    "targetPath": "/en/contact",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Corporate Page",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/careers/",
+    "sourcePath": "/careers/",
+    "targetUrl": "https://mwheba.com/en/careers",
+    "targetPath": "/en/careers",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Corporate Page",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/services/printing/",
+    "sourcePath": "/services/printing/",
+    "targetUrl": "https://mwheba.com/en/services/printing",
+    "targetPath": "/en/services/printing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Service Detail",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/about/",
+    "sourcePath": "/about/",
+    "targetUrl": "https://mwheba.com/en/about",
+    "targetPath": "/en/about",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Corporate Page",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/privacy-policy/",
+    "sourcePath": "/privacy-policy/",
+    "targetUrl": "https://mwheba.com/en/privacy-policy",
+    "targetPath": "/en/privacy-policy",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Legal Document",
+    "notes": "Provisional target in Next.js localized route structure"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/test-blog-2/",
+    "sourcePath": "/test-blog-2/",
+    "targetUrl": "https://mwheba.com/en/blog",
+    "targetPath": "/en/blog",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Demo Blog Post",
+    "notes": "Provisional: Dummy post (Test Blog 2 - MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /blog if GSC shows backlinks"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/test-blog/",
+    "sourcePath": "/test-blog/",
+    "targetUrl": "https://mwheba.com/en/blog",
+    "targetPath": "/en/blog",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Demo Blog Post",
+    "notes": "Provisional: Dummy post (Test blog - MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /blog if GSC shows backlinks"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/hello-world/",
+    "sourcePath": "/hello-world/",
+    "targetUrl": "https://mwheba.com/en/blog",
+    "targetPath": "/en/blog",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Demo Blog Post",
+    "notes": "Provisional: Dummy post (Hello world! - MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /blog if GSC shows backlinks"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio/test/",
+    "sourcePath": "/portfolio/test/",
+    "targetUrl": "https://mwheba.com/en/portfolio",
+    "targetPath": "/en/portfolio",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Demo Portfolio Post",
+    "notes": "Provisional: Empty dummy portfolio item; serve 410 Gone or 301 to /portfolio"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/social-media-managemnt-package/",
+    "sourcePath": "/product/social-media-managemnt-package/",
+    "targetUrl": "https://mwheba.com/en/services/digital-marketing",
+    "targetPath": "/en/services/digital-marketing",
+    "action": "REQUIRES_REVIEW",
+    "statusCode": 301,
+    "routeType": "Unconfigured Service Test",
+    "notes": "Provisional: Agency test service with typo; review whether to map to digital marketing package or 410"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/vintage-typewriter/",
+    "sourcePath": "/product/vintage-typewriter/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Theme Demo Product",
+    "notes": "Provisional: Theme template product (Vintage Typewriter &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/leather-clad-leisure-chair/",
+    "sourcePath": "/product/leather-clad-leisure-chair/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Theme Demo Product",
+    "notes": "Provisional: Theme template product (Leather-Clad Leisure Chair &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/black-and-white/",
+    "sourcePath": "/product/black-and-white/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Theme Demo Product",
+    "notes": "Provisional: Theme template product (Black and White &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/3-speed-bike/",
+    "sourcePath": "/product/3-speed-bike/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Theme Demo Product",
+    "notes": "Provisional: Theme template product (3-Speed Bike &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/hi-fi-headphones/",
+    "sourcePath": "/product/hi-fi-headphones/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Theme Demo Product",
+    "notes": "Provisional: Theme template product (Hi-Fi Headphones &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/product/retro-glass-jug-330-ml/",
+    "sourcePath": "/product/retro-glass-jug-330-ml/",
+    "targetUrl": "https://mwheba.com/en/shop",
+    "targetPath": "/en/shop",
+    "action": "GONE_410",
+    "statusCode": 410,
+    "routeType": "Theme Demo Product",
+    "notes": "Provisional: Theme template product (Retro Glass Jug (330 ml) &#8211; MWHEBA Agency); serve 410 Gone to drop from index, or 301 to /shop"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio-category/brand-identity/",
+    "sourcePath": "/portfolio-category/brand-identity/",
+    "targetUrl": "https://mwheba.com/en/portfolio?category=brand-identity",
+    "targetPath": "/en/portfolio?category=brand-identity",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Taxonomy Archive",
+    "notes": "Provisional: Taxonomy archive redirect to filtered portfolio route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio-category/digital-marketing/",
+    "sourcePath": "/portfolio-category/digital-marketing/",
+    "targetUrl": "https://mwheba.com/en/portfolio?category=digital-marketing",
+    "targetPath": "/en/portfolio?category=digital-marketing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Taxonomy Archive",
+    "notes": "Provisional: Taxonomy archive redirect to filtered portfolio route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio-category/media-production/",
+    "sourcePath": "/portfolio-category/media-production/",
+    "targetUrl": "https://mwheba.com/en/portfolio?category=media-production",
+    "targetPath": "/en/portfolio?category=media-production",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Taxonomy Archive",
+    "notes": "Provisional: Taxonomy archive redirect to filtered portfolio route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio-category/printing/",
+    "sourcePath": "/portfolio-category/printing/",
+    "targetUrl": "https://mwheba.com/en/portfolio?category=printing",
+    "targetPath": "/en/portfolio?category=printing",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Taxonomy Archive",
+    "notes": "Provisional: Taxonomy archive redirect to filtered portfolio route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio-category/ui-ux-design/",
+    "sourcePath": "/portfolio-category/ui-ux-design/",
+    "targetUrl": "https://mwheba.com/en/portfolio?category=ui-ux-design",
+    "targetPath": "/en/portfolio?category=ui-ux-design",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Taxonomy Archive",
+    "notes": "Provisional: Taxonomy archive redirect to filtered portfolio route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/portfolio-category/web-design/",
+    "sourcePath": "/portfolio-category/web-design/",
+    "targetUrl": "https://mwheba.com/en/portfolio?category=web-design",
+    "targetPath": "/en/portfolio?category=web-design",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "Taxonomy Archive",
+    "notes": "Provisional: Taxonomy archive redirect to filtered portfolio route"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/robots.txt",
+    "sourcePath": "/robots.txt",
+    "targetUrl": "https://mwheba.com/robots.txt",
+    "targetPath": "/robots.txt",
+    "action": "PRESERVE",
+    "statusCode": 200,
+    "routeType": "System File",
+    "notes": "Next.js app/robots.ts native endpoint; preserved as active system resource"
+  },
+  {
+    "legacyUrl": "https://mwheba.com/sitemaps.xml",
+    "sourcePath": "/sitemaps.xml",
+    "targetUrl": "https://mwheba.com/sitemap.xml",
+    "targetPath": "/sitemap.xml",
+    "action": "REDIRECT_301",
+    "statusCode": 301,
+    "routeType": "System File",
+    "notes": "Legacy sitemaps.xml permanently redirects to canonical Next.js /sitemap.xml"
+  }
+]

@@ -1,6 +1,9 @@
 /**
  * Legacy Portfolio Projects Data
- * Built around authentic verified client accounts from docs/audit/03-content-and-media-audit.md
+ * Built around verified client logo accounts from docs/audit/03-content-and-media-audit.md
+ * NOTE: Live site v1 contained 0 case studies (Our Projects was an empty grid shell).
+ * These entries are strictly categorized as DRAFTS pending stakeholder case study submission.
+ * Zero unverified statistics or fabricated numbers are included.
  */
 
 export interface LegacyPortfolioItem {
@@ -8,7 +11,9 @@ export interface LegacyPortfolioItem {
   serviceCategory: 'branding' | 'digital_marketing' | 'corporate_gifts' | 'media_production';
   featured: boolean;
   year: number;
-  projectUrl?: string;
+  sourceOrigin: 'case_study_draft_pending_owner_data';
+  sourceReference: string;
+  approvalStatus: 'pending_case_study_data';
   ar: {
     title: string;
     clientName: string;
@@ -37,43 +42,38 @@ export const legacyPortfolioData: LegacyPortfolioItem[] = [
     serviceCategory: 'branding',
     featured: true,
     year: 2025,
+    sourceOrigin: 'case_study_draft_pending_owner_data',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 3.C Client Logo #1 (Oxford)',
+    approvalStatus: 'pending_case_study_data',
     ar: {
-      title: 'تطوير الهوية المؤسسية الشاملة لمجموعة أوكسفورد',
+      title: 'الهوية المؤسسية لمجموعة أوكسفورد التعليمية (مسودة دراسة حالة)',
       clientName: 'مجموعة أوكسفورد التعليمية',
       industry: 'التعليم الدولي والتدريب المتخصص',
       summary:
-        'تصميم وتطوير منظومة بصرية متكاملة تعكس عراقة المؤسسة وتدعم توسعها الإقليمي عبر فروع ومراكز تدريب متعددة.',
-      coverImageAlt: 'دليل الهوية البصرية والمطبوعات المعتمدة لمجموعة أوكسفورد',
+        'مسودة دراسة حالة مقترحة ترتكز على الشعار الموثق للعميل، بانتظار تزويد فريق العمل بالتفاصيل التشغيلية وسرد التحدي والحل المعتمد.',
+      coverImageAlt: 'شعار وهوية مجموعة أوكسفورد التعليمية',
       narrative:
-        'التحدي: كانت المجموعة تعاني من تشتت في التطبيقات البصرية بين فروعها المختلفة وغياب دليل إرشادي موحد يحكم استخدام الشعار والخطوط والألوان.\n\nالحل: قمنا بإعادة صياغة الشعار بهندسة دقيقة وتطوير لوحة ألوان ملكية هادئة، وصياغة دليل هوية إرشادي شامل يغطي أكثر من 60 صفحة لتوحيد كافة المطبوعات واللافتات والمنصات الرقمية.',
+        'ملاحظة توثيقية: تم تأكيد وجود شعار مجموعة أوكسفورد ضمن عملاء الوكالة المعتمدين في فحص الموقع الأصلي (AUD-03: Section 3.C). تفاصيل المشروع وسياق التنفيذ قيد استكمال المالك والمراجعة التحريرية.',
       deliverables: [
-        { item: 'دليل الهوية البصرية الإرشادي الشامل (65 صفحة)' },
-        { item: 'تصميم منظومة المطبوعات والشهادات المعتمدة والقرطاسية' },
-        { item: 'قوالب العروض التقديمية والمنشورات الرقمية' },
+        { item: 'الهوية البصرية وتطبيقات العلامة' },
+        { item: 'المطبوعات المؤسسية والقرطاسية' },
       ],
-      results: [
-        { metric: '100%', label: 'توحيد الهوية البصرية عبر 8 فروع' },
-        { metric: '+45%', label: 'زيادة معدل ثقة وانطباع الطلاب الجدد' },
-      ],
+      results: [],
     },
     en: {
-      title: 'Comprehensive Brand Identity Architecture for Oxford Group',
+      title: 'Oxford Education Group Brand Identity (Draft Case Study)',
       clientName: 'Oxford Educational Group',
       industry: 'Higher Education & Executive Training',
       summary:
-        'Architecting a unified visual identity and institutional brand manual supporting multi-campus regional expansion.',
-      coverImageAlt: 'Oxford Educational Group brand manual and official certificates',
+        'Proposed draft case study anchored on verified client logo from live site audit, pending stakeholder submission of detailed operational background.',
+      coverImageAlt: 'Oxford Educational Group verified brand mark and collateral',
       narrative:
-        'Challenge: The group faced visual fragmentation across its distributed regional campuses and lacked standard governance for official certifications and collateral.\n\nSolution: We engineered an authoritative logomark, formulated an institutional palette, and authored a 65-page brand standards manual governing all physical and digital collateral.',
+        'Audit Provenance Note: Oxford logo presence verified via live site audit (AUD-03: Section 3.C). Detailed project narrative and execution milestones are pending stakeholder review.',
       deliverables: [
-        { item: 'Comprehensive 65-page Corporate Brand Guidelines Manual' },
-        { item: 'Certified Diplomas, Stationery & Administrative Collaterals' },
-        { item: 'Executive Presentation Kits & Digital Visual Assets' },
+        { item: 'Visual Identity & Brand Applications' },
+        { item: 'Corporate Stationery Collaterals' },
       ],
-      results: [
-        { metric: '100%', label: 'Visual Consistency Across 8 Campuses' },
-        { metric: '+45%', label: 'Positive Institutional Perception Uplift' },
-      ],
+      results: [],
     },
   },
   {
@@ -81,43 +81,38 @@ export const legacyPortfolioData: LegacyPortfolioItem[] = [
     serviceCategory: 'corporate_gifts',
     featured: true,
     year: 2025,
+    sourceOrigin: 'case_study_draft_pending_owner_data',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 3.C Client Logo #2 (Bico Misr)',
+    approvalStatus: 'pending_case_study_data',
     ar: {
-      title: 'تصميم وتنفيذ أنظمة التغليف والهدايا الترويجية لشركة بيكو مصر',
+      title: 'أنظمة التغليف والهدايا الترويجية لشركة بيكو مصر (مسودة دراسة حالة)',
       clientName: 'شركة بيكو مصر للتجارة والصناعة',
       industry: 'الصناعات الهندسية والتجارة الدولية',
       summary:
-        'تطوير خطوط التعبئة والتغليف وأطقم الهدايا الترويجية المخصصة لشركاء بيكو مصر والموزعين المعتمدين في الشرق الأوسط.',
-      coverImageAlt: 'أطقم الهدايا الترويجية والعبوات الفاخرة لشركة بيكو مصر',
+        'مسودة دراسة حالة مقترحة لمنتجات وتغليف هدايا بيكو مصر، بانتظار اعتماد الأرقام والمواصفات الفنية النهائية من إدارة العمليات.',
+      coverImageAlt: 'شعار ومنتجات التغليف لشركة بيكو مصر',
       narrative:
-        'التحدي: الحاجة إلى تقديم هدايا ترويجية ومواد تغليف تبرز الجودة الصناعية الرفيعة للمنتجات وتقاوم ظروف الشحن والتخزين القاسية.\n\nالحل: صممنا ونفذنا علب هدايا فاخرة بحفر ليزري دقيق على سبائك معدنية ومواد صديقة للبيئة، مع بطاقات ضمان مخصصة وأطقم هدايا مكتبية متينة.',
+        'ملاحظة توثيقية: تم توثيق شعار شركة بيكو مصر كعميل معتمد في فحص الموقع السابق (AUD-03: Section 3.C). تفاصيل أحجام الشحنات وسردية المشروع تخضع لموافقة المالك ولا تُنشر كأرقام قطعية.',
       deliverables: [
-        { item: 'تصميم وتنفيذ عبوات الهدايا الفاخرة للشركاء' },
-        { item: 'أطقم مكتبية مخصصة بحفر ليزري عالي الدقة' },
-        { item: 'كتالوجات المنتجات الصناعية بالطباعة الفاخرة' },
+        { item: 'عبوات وتغليف الهدايا المؤسسية' },
+        { item: 'المطبوعات الفنية والكتالوجات' },
       ],
-      results: [
-        { metric: '5,000+', label: 'وحدة هدايا تم تسليمها بجودة تامة' },
-        { metric: '0%', label: 'نسبة التلف بفضل التغليف المقوى' },
-      ],
+      results: [],
     },
     en: {
-      title: 'Industrial Packaging & VIP Promotional Sets for Bico Misr',
+      title: 'Bico Misr Industrial Packaging & Promotional Sets (Draft Case Study)',
       clientName: 'Bico Misr Industrial & Trading Co.',
       industry: 'Engineering & International Distribution',
       summary:
-        'Engineering durable corporate gift packaging and bespoke executive merchandise sets for premier B2B distributors.',
-      coverImageAlt: 'Bico Misr corporate merchandise sets and rigid packaging',
+        'Proposed draft case study for Bico Misr branded packaging collaterals, pending stakeholder verification of technical specifications.',
+      coverImageAlt: 'Bico Misr corporate mark and packaging collaterals',
       narrative:
-        'Challenge: The client required executive gifts and packaging systems that mirrored their precision engineering standards while withstanding rigorous shipping logistics.\n\nSolution: We manufactured rigid custom gift boxes featuring precision laser-etched metal accents, durable leather accessories, and bespoke technical product catalogs.',
+        'Audit Provenance Note: Bico Misr client mark cataloged in live site audit (AUD-03: Section 3.C). Production volumes and case metrics require stakeholder confirmation prior to publication.',
       deliverables: [
-        { item: 'Bespoke Executive Gift Boxes & Protective Packaging' },
-        { item: 'Precision Laser-Engraved Office Accessory Sets' },
-        { item: 'Heavyweight Matte-Laminated Product Catalogs' },
+        { item: 'Executive Gift Boxes & Packaging' },
+        { item: 'Technical Product Catalogs' },
       ],
-      results: [
-        { metric: '5,000+', label: 'Units Delivered with 100% Quality Acceptance' },
-        { metric: '0%', label: 'Transit Damage via Custom Structural Design' },
-      ],
+      results: [],
     },
   },
   {
@@ -125,43 +120,38 @@ export const legacyPortfolioData: LegacyPortfolioItem[] = [
     serviceCategory: 'corporate_gifts',
     featured: false,
     year: 2024,
+    sourceOrigin: 'case_study_draft_pending_owner_data',
+    sourceReference: 'docs/audit/03-content-and-media-audit.md: Section 3.C Client Logo #5 (TrueDent)',
+    approvalStatus: 'pending_case_study_data',
     ar: {
-      title: 'الهوية المؤسسية والمطبوعات الطبية المعتمدة لمراكز ترو دنت',
+      title: 'المطبوعات الطبية المعتمدة لمراكز ترو دنت (مسودة دراسة حالة)',
       clientName: 'مراكز ترو دنت لطب وزراعة الأسنان',
       industry: 'الرعاية الصحية والمراكز الطبية التخصصية',
       summary:
-        'تطوير منظومة المطبوعات الطبية المعتمدة، وبطاقات المتابعة، والزي الطبي الموحد لكوادر العيادات.',
-      coverImageAlt: 'الزي الطبي الموحد والملفات الطبية لمراكز ترو دنت',
+        'مسودة دراسة حالة مقترحة لتوريدات المطبوعات الطبية والزي الموحد، بانتظار التحقق من بيانات المشروع التفصيلية.',
+      coverImageAlt: 'شعار ومطبوعات مراكز ترو دنت الطبية',
       narrative:
-        'التحدي: تحقيق أعلى معايير النظافة والتعقيم في المواد الورقية والمطبوعات المباشرة للمرضى، مع إبراز الطابع الطبي المتطور للمركز.\n\nالحل: تم اختيار أوراق مقاومة للرطوبة وسلوفان حراري معقم لكروت المتابعة وملفات المرضى، وتصميم زي طبي مطرز بشعار المركز بأعلى دقة.',
+        'ملاحظة توثيقية: تم توثيق شعار ترو دنت كعميل معتمد في تقرير الفحص (AUD-03: Section 3.C). دراسة الحالة تُحفظ كمسودة غير منشورة لحين اعتماد المالك.',
       deliverables: [
-        { item: 'ملفات وتقارير المرضى الطبية المغلفة بالسلوفان الحراري' },
-        { item: 'بطاقات المواعيد وبطاقات العضوية الممغنطة' },
-        { item: 'الزي الطبي الموحد (Scrubs & Lab Coats) بتطريز احترافي' },
+        { item: 'المطبوعات والملفات الطبية' },
+        { item: 'الزي الطبي الموحد' },
       ],
-      results: [
-        { metric: '100%', label: 'مطابقة لمعايير الجودة الطبية' },
-        { metric: '+30%', label: 'زيادة التزام المرضى بمواعيد المتابعة' },
-      ],
+      results: [],
     },
     en: {
-      title: 'Clinical Identity & Certified Medical Stationery for TrueDent',
+      title: 'TrueDent Clinical Stationery & Branded Apparel (Draft Case Study)',
       clientName: 'TrueDent Specialized Dental Centers',
       industry: 'Specialized Healthcare & Dental Surgery',
       summary:
-        'Creating clinical stationery, patient records, and embroidered professional medical apparel for healthcare providers.',
-      coverImageAlt: 'TrueDent medical stationery and clinical scrubs',
+        'Proposed draft case study for clinical documentation and custom apparel, pending stakeholder verification.',
+      coverImageAlt: 'TrueDent dental centers brand mark and clinic stationery',
       narrative:
-        'Challenge: Balancing hygiene compliance with sophisticated medical aesthetics across patient-facing documentation and clinical uniforms.\n\nSolution: We engineered antimicrobial laminated record folders, waterproof appointment smart cards, and custom-embroidered medical scrubs for clinic staff.',
+        'Audit Provenance Note: TrueDent client mark verified via audit (AUD-03: Section 3.C). Narrative details remain in draft status pending owner sign-off.',
       deliverables: [
-        { item: 'Laminated Clinical Patient Folders & Charts' },
-        { item: 'Magnetic Membership Cards & Appointment Passports' },
-        { item: 'Custom-Embroidered Clinical Scrubs & Doctor Lab Coats' },
+        { item: 'Clinical Folders & Documentation' },
+        { item: 'Professional Medical Apparel' },
       ],
-      results: [
-        { metric: '100%', label: 'Medical Hygiene Specification Compliance' },
-        { metric: '+30%', label: 'Follow-up Appointment Attendance Rate' },
-      ],
+      results: [],
     },
   },
 ];
