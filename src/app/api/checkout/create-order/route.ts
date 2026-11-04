@@ -76,15 +76,36 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Create order atomically inside PostgreSQL transaction
+    // Explicitly reject Paymob payment method at this stage (D-008)
+    if (paymentMethod === 'paymob') {
+      return NextResponse.json(
+        {
+          success: false,
+          error: 'PAYMOB_GATEWAY_DEFERRED: Online gateway payments (Paymob) are deferred to Phase 2 per DECISIONS.md D-008. Please choose Corporate Bank Transfer or Cash on Delivery.',
+        },
+        { status: 422 }
+      );
+    }
+
+    // 4. Resolve idempotency key from headers or body
+    const idempotencyKey =
+      req.headers.get('idempotency-key') ||
+      req.headers.get('x-idempotency-key') ||
+      body.idempotencyKey ||
+      undefined;
+
+    // 5. Create order atomically inside PostgreSQL transaction
     const result = await createOrderFromCart(payload, {
       cartId: cart.id,
       guestSecret: cart.secret,
+      idempotencyKey,
       user,
       customer,
       delivery,
       paymentMethod,
     });
+
+    const status = result.isIdempotentReplay ? 200 : 201;
 
     const response = NextResponse.json(
       {
@@ -96,8 +117,9 @@ export async function POST(req: NextRequest) {
         total: result.order.total || result.order.amount,
         status: result.order.orderStatus,
         paymentStatus: result.order.paymentStatus,
+        isIdempotentReplay: Boolean(result.isIdempotentReplay),
       },
-      { status: 201 }
+      { status }
     );
 
     return response;

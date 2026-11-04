@@ -31,7 +31,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
   // Toggles
   const [deliveryMethod, setDeliveryMethod] = useState<'shipping' | 'pickup'>('shipping');
-  const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'cod' | 'paymob'>('bank_transfer');
+  const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'cod'>('bank_transfer');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOrderPlaced, setIsOrderPlaced] = useState(false);
   const [placedOrder, setPlacedOrder] = useState<any>(null);
@@ -72,7 +72,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
             } : undefined,
             fulfillmentNotes,
           },
-          paymentMethod: paymentMethod === 'paymob' ? 'bank_transfer' : paymentMethod,
+          paymentMethod: paymentMethod,
         }),
       });
 
@@ -581,27 +581,29 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                     gap: '0.85rem',
                     padding: '1rem',
                     borderRadius: 'var(--radius-sm)',
-                    border: paymentMethod === 'paymob' ? '2px solid var(--brand-primary)' : '1px solid var(--border-default)',
-                    backgroundColor: paymentMethod === 'paymob' ? 'var(--status-info-bg)' : 'var(--bg-primary)',
-                    cursor: 'pointer',
+                    border: '1px solid var(--border-default)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    opacity: 0.65,
+                    cursor: 'not-allowed',
                   }}
                 >
                   <input
                     type="radio"
                     name="payment"
-                    checked={paymentMethod === 'paymob'}
-                    onChange={() => setPaymentMethod('paymob')}
-                    style={{ marginTop: '0.25rem' }}
+                    disabled={true}
+                    checked={false}
+                    readOnly
+                    style={{ marginTop: '0.25rem', cursor: 'not-allowed' }}
                   />
                   <div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span style={{ fontWeight: 700, color: 'var(--brand-primary-dark)' }}>
+                      <span style={{ fontWeight: 700, color: 'var(--text-muted)' }}>
                         {isArabic ? 'بوابة الدفع الإلكتروني (Paymob)' : 'Online Payment (Paymob Gateway)'}
                       </span>
-                      <Badge variant="neutral">{isArabic ? 'مؤجل للمرحلة 6 (D-008)' : 'Phase 6 Integration (D-008)'}</Badge>
+                      <Badge variant="neutral">{isArabic ? 'مؤجل للمرحلة 6 (D-008)' : 'Deferred to Phase 6 (D-008)'}</Badge>
                     </div>
-                    <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-                      {isArabic ? 'الدفع الفوري ببطاقات ميزة، فيزا، وماستركارد (نموذج محاكاة، الربط الفعلي بالمرحلة 6)' : 'Card payment simulation (live sandbox integration scheduled in Phase 6)'}
+                    <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                      {isArabic ? 'مغلق ومؤجل للمرحلة 6 وفقاً للقرار D-008. غير متاح للاختيار حالياً.' : 'Disabled and deferred to Phase 6 per Decision D-008. Not available for selection.'}
                     </div>
                   </div>
                 </label>
@@ -683,7 +685,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                 <span>{isArabic ? 'رسوم الشحن والتوصيل:' : 'Delivery & Logistics:'}</span>
-                <span>{shippingFee === 0 ? (isArabic ? 'مجاني (استلام مقر)' : 'Free (Pickup)') : `${shippingFee} ${isArabic ? 'ج.م' : 'EGP'}`}</span>
+                <span>{shippingFee === 0 ? (isArabic ? 'مجاني (استلام مقر)' : 'Free (Pickup)') : `${shippingFee} ${isArabic ? 'ج.م (تقديري مؤقت D-015)' : 'EGP (provisional D-015)'}`}</span>
               </div>
 
               <div

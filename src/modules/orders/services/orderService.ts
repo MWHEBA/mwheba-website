@@ -6,6 +6,7 @@
 import type { Payload } from 'payload';
 import { validateCartMoq } from '../../cart-checkout/logic/moqEngine';
 import { withCartLock } from '../../cart-checkout/services/cartStorage';
+import { resolveDeliveryTariff } from './deliveryTariff';
 
 export interface CreateOrderCustomerInput {
   email: string;
@@ -25,11 +26,13 @@ export interface CreateOrderDeliveryInput {
     buildingDetails?: string;
   };
   fulfillmentNotes?: string;
+  customFee?: number;
 }
 
 export interface CreateOrderFromCartInput {
   cartId: number;
   guestSecret?: string;
+  idempotencyKey?: string;
   user?: {
     id: number;
     email: string;
@@ -46,6 +49,7 @@ export interface CreateOrderResult {
   orderNumber: string;
   customerId: number;
   userCreated: boolean;
+  isIdempotentReplay?: boolean;
 }
 
 /**
@@ -54,25 +58,35 @@ export interface CreateOrderResult {
  * Rules:
  * 1. Cart is locked via PostgreSQL advisory lock (`withCartLock`) to prevent concurrent cart tampering.
  * 2. Cart ownership is strictly verified against active auth session or guest secret.
- * 3. Server-authoritative catalog prices, separate customization fees, and strict Product ID MOQ (>=10 for physical) are re-validated.
- * 4. Mixed carts (physical + services) are supported; COD is strictly blocked if mixed or digital (D-021).
- * 5. Seamless inline registration: Guest enters password directly. No temporary passwords. If email already registered, rejects with 409.
- * 6. OrderItems snapshot is frozen (productTitle, variantTitle, sku, basePrice, customizationFee, lineTotal, artwork details).
- * 7. Delivery selection: Standard shipping stores address; Office pickup sets fulfillment note to "Office Pickup" and waives shipping fee.
- * 8. Statuses initialized: orderStatus = 'pending', paymentStatus = 'unpaid', fulfillmentStatus = 'unfulfilled'.
- * 9. Attached artwork assets transition to 'committed_order'.
- * 10. Cart is emptied upon successful commit.
- * 11. Full transaction rollback if any step fails.
+ * 3. Ambiguous Commit / Lost Response Recovery: If order was already committed for this cart or idempotencyKey,
+ *    returns the existing order without throwing an empty-cart error.
+ * 4. Server-authoritative catalog prices, separate customization fees, and strict Product ID MOQ (>=10 for physical) are re-validated.
+ * 5. Mixed carts (physical + services) are supported; COD is strictly blocked if mixed or digital (D-021).
+ * 6. Paymob selection is strictly prohibited at this stage and rejected with 422 (D-008).
+ * 7. Seamless inline registration: Guest enters password directly. No temporary passwords. If email already registered, rejects with 409.
+ * 8. OrderItems snapshot is frozen (productTitle, variantTitle, sku, basePrice, customizationFee, lineTotal, artwork details).
+ * 9. Delivery tariff: Standard shipping and pickup fees resolved via delivery tariff engine and marked as provisional pending owner sign-off (D-015).
+ * 10. Statuses initialized: orderStatus = 'pending', paymentStatus = 'unpaid', fulfillmentStatus = 'unfulfilled'.
+ * 11. Transaction requirement: Fails immediately if beginTransaction is not available; full rollback on any failure.
  */
 export async function createOrderFromCart(
   payload: Payload,
   input: CreateOrderFromCartInput
 ): Promise<CreateOrderResult> {
-  const { cartId, guestSecret, user, customer, delivery, paymentMethod } = input;
+  const { cartId, guestSecret, idempotencyKey, user, customer, delivery, paymentMethod } = input;
 
   if (!cartId || typeof cartId !== 'number') {
     const err = new Error('INVALID_CART_ID: Valid numeric cart ID is required.');
     (err as any).statusCode = 400;
+    throw err;
+  }
+
+  // Enforce Paymob rejection at service layer (D-008)
+  if ((paymentMethod as string) === 'paymob') {
+    const err = new Error(
+      'PAYMOB_GATEWAY_DEFERRED: Online gateway payments (Paymob) are deferred to Phase 2 per DECISIONS.md D-008. Please choose Corporate Bank Transfer or Cash on Delivery.'
+    );
+    (err as any).statusCode = 422;
     throw err;
   }
 
@@ -106,13 +120,53 @@ export async function createOrderFromCart(
       }
     }
 
+    // 3. AMBIGUOUS COMMIT / LOST RESPONSE RECOVERY (Idempotent Retry)
+    // If the transaction committed and the response was lost, the client retry with the same cart/key
+    // should return the existing order rather than failing on an empty cart.
+    const searchConditions: any[] = [
+      { cart: { equals: cartId } },
+    ];
+    if (idempotencyKey) {
+      searchConditions.push({ idempotencyKey: { equals: idempotencyKey } });
+    }
+
+    const existingOrders = await payload.find({
+      collection: 'orders',
+      where: {
+        or: searchConditions,
+      },
+      sort: '-createdAt',
+      limit: 1,
+    });
+
+    if (existingOrders.totalDocs > 0) {
+      const existingOrder = existingOrders.docs[0];
+      const orderCustId = typeof existingOrder.customer === 'object' && existingOrder.customer !== null ? existingOrder.customer.id : existingOrder.customer;
+
+      const isAuthorized = user?.id
+        ? String(orderCustId) === String(user.id)
+        : (guestSecret && String(cart.secret || '') === String(guestSecret));
+
+      if (isAuthorized && existingOrder.orderStatus !== 'cancelled') {
+        return {
+          success: true,
+          order: existingOrder,
+          orderNumber: String(existingOrder.orderNumber || ''),
+          customerId: Number(orderCustId),
+          userCreated: false,
+          isIdempotentReplay: true,
+        };
+      }
+    }
+
+    // Check non-empty items only after checking for existing committed order
     if (!cart.items || !Array.isArray(cart.items) || cart.items.length === 0) {
       const err = new Error('EMPTY_CART: Cannot checkout an empty cart.');
       (err as any).statusCode = 400;
       throw err;
     }
 
-    // 3. Customer validation & seamless registration check (D-013)
+    // 4. Customer validation & seamless registration check (D-013)
     const normalizedEmail = (customer.email || '').trim().toLowerCase();
     if (!normalizedEmail || !normalizedEmail.includes('@')) {
       const err = new Error('INVALID_EMAIL: A valid customer email is required for checkout.');
@@ -148,7 +202,7 @@ export async function createOrderFromCart(
       }
     }
 
-    // 4. Server-authoritative catalog pricing, variant verification, and MOQ calculation
+    // 5. Server-authoritative catalog pricing, variant verification, and MOQ calculation
     const productMap = new Map<string | number, any>();
     const variantMap = new Map<string | number, any>();
     const attachedAssetIds: string[] = [];
@@ -247,10 +301,23 @@ export async function createOrderFromCart(
       }
     }
 
-    // 5. Begin PostgreSQL transaction
-    let transactionID: string | number | null = null;
-    if (typeof (payload.db as any)?.beginTransaction === 'function') {
-      transactionID = await (payload.db as any).beginTransaction();
+    // 6. STRICT POSTGRESQL TRANSACTION ENFORCEMENT
+    // Operating without transactions is strictly prohibited. If beginTransaction is missing or fails, throw immediately.
+    if (typeof (payload.db as any)?.beginTransaction !== 'function') {
+      const err = new Error(
+        'DATABASE_TRANSACTION_UNAVAILABLE: PostgreSQL transaction support is strictly required for atomic order creation. Operating without transactions is prohibited.'
+      );
+      (err as any).statusCode = 500;
+      throw err;
+    }
+
+    const transactionID = await (payload.db as any).beginTransaction();
+    if (!transactionID) {
+      const err = new Error(
+        'TRANSACTION_BEGIN_FAILED: Could not establish a database transaction for order creation.'
+      );
+      (err as any).statusCode = 500;
+      throw err;
     }
 
     const txReq: any = {
@@ -262,7 +329,7 @@ export async function createOrderFromCart(
     };
 
     try {
-      // 6. Seamless User Registration / Association
+      // 7. Seamless User Registration / Association
       let customerId: number;
       let userCreated = false;
 
@@ -309,7 +376,7 @@ export async function createOrderFromCart(
         userCreated = true;
       }
 
-      // 7. Verify artwork asset references and bind to customer
+      // 8. Verify artwork asset references
       for (const assetId of attachedAssetIds) {
         const asset = await payload.findByID({
           collection: 'artwork-assets',
@@ -324,7 +391,7 @@ export async function createOrderFromCart(
         }
       }
 
-      // 8. Build frozen OrderItems snapshot
+      // 9. Build frozen OrderItems snapshot
       const orderItems = cart.items.map((item: any) => {
         const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
         const prod = productMap.get(prodId);
@@ -364,14 +431,19 @@ export async function createOrderFromCart(
         };
       });
 
-      // 9. Delivery & Shipping fee
-      const shippingFee = delivery.method === 'shipping' ? 150 : 0;
-      const fulfillmentNotes =
-        delivery.method === 'pickup'
-          ? delivery.fulfillmentNotes
-            ? `${delivery.fulfillmentNotes} (Office Pickup)`
-            : 'Office Pickup'
-          : delivery.fulfillmentNotes || '';
+      // 10. Delivery Tariff Resolution (D-015 Parameterization)
+      const tariffQuote = resolveDeliveryTariff({
+        method: delivery.method,
+        governorate: delivery.shippingAddress?.governorate,
+        customFee: delivery.customFee,
+      });
+
+      const shippingFee = tariffQuote.amount;
+      const fulfillmentNotes = delivery.method === 'pickup'
+        ? (delivery.fulfillmentNotes
+            ? `${delivery.fulfillmentNotes} • ${tariffQuote.fulfillmentNoteEn}`
+            : tariffQuote.fulfillmentNoteEn)
+        : (delivery.fulfillmentNotes || tariffQuote.fulfillmentNoteEn);
 
       const shippingAddress =
         delivery.method === 'shipping' && delivery.shippingAddress
@@ -387,7 +459,7 @@ export async function createOrderFromCart(
             }
           : undefined;
 
-      // 10. Generate order number from sequence
+      // 11. Generate order number from sequence
       let orderNumber = `MWH-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
       try {
         const pool = (payload.db as any)?.pool;
@@ -402,11 +474,13 @@ export async function createOrderFromCart(
         // Fallback to random unique format
       }
 
-      // 11. Create order record
+      // 12. Create order record inside transaction
       const order = await payload.create({
         collection: 'orders',
         data: {
           orderNumber,
+          cart: cartId,
+          idempotencyKey: idempotencyKey || undefined,
           customer: customerId,
           customerEmail: normalizedEmail,
           companyName: customer.companyName,
@@ -426,7 +500,7 @@ export async function createOrderFromCart(
         req: txReq,
       });
 
-      // 12. Transition attached artwork assets to committed_order
+      // 13. Transition attached artwork assets to committed_order
       for (const assetId of attachedAssetIds) {
         await payload.update({
           collection: 'artwork-assets',
@@ -439,31 +513,33 @@ export async function createOrderFromCart(
         });
       }
 
-      // 13. Empty user cart in database
+      // 14. Mark cart purchased and empty items in database inside transaction
       await payload.update({
         collection: 'carts',
         id: cartId,
         data: {
           items: [],
+          purchasedAt: new Date().toISOString(),
         },
         req: txReq,
       });
 
-      // 14. Commit PostgreSQL transaction
-      if (transactionID && typeof (payload.db as any)?.commitTransaction === 'function') {
+      // 15. Commit PostgreSQL transaction
+      if (typeof (payload.db as any)?.commitTransaction === 'function') {
         await (payload.db as any).commitTransaction(transactionID);
       }
 
       return {
         success: true,
         order,
-        orderNumber: order.orderNumber || orderNumber,
+        orderNumber: String(order.orderNumber || orderNumber),
         customerId,
         userCreated,
+        isIdempotentReplay: false,
       };
     } catch (error) {
-      // 15. Rollback on ANY failure
-      if (transactionID && typeof (payload.db as any)?.rollbackTransaction === 'function') {
+      // 16. Rollback on ANY failure
+      if (typeof (payload.db as any)?.rollbackTransaction === 'function') {
         try {
           await (payload.db as any).rollbackTransaction(transactionID);
         } catch {

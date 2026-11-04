@@ -5,6 +5,7 @@ import configPromise from '@/payload.config';
 import { signCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { CART_COOKIE_NAME, getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
+import { resolveDeliveryTariff } from '@/modules/orders/services/deliveryTariff';
 import { POST as checkoutRoute } from '@/app/api/checkout/create-order/route';
 
 describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', () => {
@@ -397,7 +398,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       expect(order.phone).toBe('+201234567890');
       expect(order.taxId).toBe('987-654-321');
       expect(order.deliveryMethod).toBe('shipping');
-      expect(order.shippingFee).toBe(150);
+      expect(order.shippingFee).toBe(80);
 
       // 2. Verify Line Item 0: Physical Flask (with customization)
       const flaskLine = order.items[0];
@@ -428,10 +429,10 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       expect(order.subtotal).toBe(17000);
       // Total Customization Fees: 30 * 10 = 300 EGP
       expect(order.totalCustomizationFees).toBe(300);
-      // Shipping Fee: 150 EGP
-      expect(order.shippingFee).toBe(150);
-      // Grand Total: 17000 + 300 + 150 = 17450 EGP
-      expect(order.amount).toBe(17450);
+      // Shipping Fee: 80 EGP (provisional Cairo tariff, D-015)
+      expect(order.shippingFee).toBe(80);
+      // Grand Total: 17000 + 300 + 80 = 17380 EGP
+      expect(order.amount).toBe(17380);
 
       // 5. Verify initial statuses per B2B-04
       expect(order.orderStatus).toBe('pending');
@@ -668,7 +669,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       cleanupUserIds.push(result.customerId);
 
       expect(result.order.deliveryMethod).toBe('shipping');
-      expect(result.order.shippingFee).toBe(150);
+      expect(result.order.shippingFee).toBe(90);
       expect(result.order.shippingAddress.state).toBe('الإسكندرية (Alexandria)');
       expect(result.order.shippingAddress.city).toBe('سموحة (Smouha)');
       expect(result.order.shippingAddress.addressLine1).toBe('طريق 14 مايو، برج السرايا');
@@ -1052,6 +1053,243 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       const data = await res.json();
       expect(data.success).toBe(false);
       expect(data.error).toContain('EMPTY_CART');
+    });
+  });
+
+  // =========================================================================
+  // 9. B2B-04 Blocker Validations: Paymob Lockdown, Tariff Status & Idempotent Recovery
+  // =========================================================================
+  describe('9. B2B-04 Blocker Validations', () => {
+    // 1. Paymob Lockdown: Must reject with 422 PAYMOB_GATEWAY_DEFERRED (D-008)
+    it('strictly rejects Paymob paymentMethod with 422 PAYMOB_GATEWAY_DEFERRED in service and API route', async () => {
+      const cart = await getOrCreateCart(payload);
+      cleanupCartIds.push(cart.id);
+
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: {
+          items: [{ product: physicalProductA.id, quantity: 10 }],
+        },
+      });
+
+      // A. Verify rejection at the service layer
+      await expect(
+        createOrderFromCart(payload, {
+          cartId: cart.id, guestSecret: cart.secret,
+          customer: {
+            email: `paymob_svc_${Date.now()}@mwheba.test`,
+            password: 'SecurePassword2026!',
+            companyName: 'Service Paymob Test Corp',
+            contactPerson: 'Adel Emam',
+            phone: '+201011112222',
+          },
+          delivery: { method: 'pickup' },
+          paymentMethod: 'paymob' as any,
+        })
+      ).rejects.toThrowError(/PAYMOB_GATEWAY_DEFERRED/);
+
+      // B. Verify rejection at the API route layer
+      const signedCookie = signCartId(cart.id);
+      const req = new NextRequest('http://localhost:3000/api/checkout/create-order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+        },
+        body: JSON.stringify({
+          customer: {
+            email: `paymob_route_${Date.now()}@mwheba.test`,
+            password: 'SecurePassword2026!',
+            companyName: 'Route Paymob Test Corp',
+            contactPerson: 'Samir Ghanem',
+            phone: '+201011113333',
+          },
+          delivery: { method: 'pickup' },
+          paymentMethod: 'paymob',
+        }),
+      });
+
+      const res = await checkoutRoute(req);
+      expect(res.status).toBe(422);
+
+      const json = await res.json();
+      expect(json.success).toBe(false);
+      expect(json.error).toContain('PAYMOB_GATEWAY_DEFERRED');
+    });
+
+    // 2. Delivery Tariff Resolution & Schedule Status (D-015)
+    it('resolves delivery tariff with provisional status and pending_owner_tariff_approval (D-015)', () => {
+      const shippingTariff = resolveDeliveryTariff({
+        method: 'shipping',
+        governorate: 'Cairo',
+      });
+
+      expect(shippingTariff.amount).toBe(80);
+      expect(shippingTariff.isProvisional).toBe(true);
+      expect(shippingTariff.tariffScheduleStatus).toBe('pending_owner_tariff_approval');
+
+      const defaultShippingTariff = resolveDeliveryTariff({
+        method: 'shipping',
+      });
+      expect(defaultShippingTariff.amount).toBe(150);
+      expect(defaultShippingTariff.isProvisional).toBe(true);
+      expect(defaultShippingTariff.tariffScheduleStatus).toBe('pending_owner_tariff_approval');
+
+      const pickupTariff = resolveDeliveryTariff({
+        method: 'pickup',
+      });
+      expect(pickupTariff.amount).toBe(0);
+      expect(pickupTariff.isProvisional).toBe(true);
+      expect(pickupTariff.tariffScheduleStatus).toBe('pending_owner_tariff_approval');
+    });
+
+    // 3. Strict Transaction Enforcement: Database transaction must be available
+    it('fails immediately with 500 DATABASE_TRANSACTION_UNAVAILABLE if beginTransaction is not available', async () => {
+      const cart = await getOrCreateCart(payload);
+      cleanupCartIds.push(cart.id);
+
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: {
+          items: [{ product: physicalProductA.id, quantity: 10 }],
+        },
+      });
+
+      // Temporarily mock beginTransaction to undefined
+      const originalBeginTx = payload.db?.beginTransaction;
+      try {
+        if (payload.db) {
+          payload.db.beginTransaction = undefined;
+        }
+
+        await expect(
+          createOrderFromCart(payload, {
+            cartId: cart.id, guestSecret: cart.secret,
+            customer: {
+              email: `no_tx_${Date.now()}@mwheba.test`,
+              password: 'SecurePassword2026!',
+              companyName: 'No Tx Corp',
+              contactPerson: 'Nour El-Sherif',
+              phone: '+201099998888',
+            },
+            delivery: { method: 'pickup' },
+            paymentMethod: 'bank_transfer',
+          })
+        ).rejects.toThrowError(/DATABASE_TRANSACTION_UNAVAILABLE/);
+      } finally {
+        if (payload.db) {
+          payload.db.beginTransaction = originalBeginTx;
+        }
+      }
+    });
+
+    // 4. Ambiguous Commit & Lost Network Response Recovery
+    it('recovers cleanly from lost network response: retry with same cart returns existing order instead of EMPTY_CART', async () => {
+      const cart = await getOrCreateCart(payload);
+      cleanupCartIds.push(cart.id);
+
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: {
+          items: [{ product: physicalProductA.id, quantity: 10 }],
+        },
+      });
+
+      const clientOrderEmail = `lost_network_client_${Date.now()}@mwheba.test`;
+      const idempotencyKey = `op_checkout_${Date.now()}_retry_test`;
+
+      // 1. Initial order creation
+      const firstResult = await createOrderFromCart(payload, {
+        cartId: cart.id, guestSecret: cart.secret,
+        idempotencyKey,
+        customer: {
+          email: clientOrderEmail,
+          password: 'SecurePassword2026!',
+          companyName: 'Lost Network Recovery Corp',
+          contactPerson: 'Youssef Chahine',
+          phone: '+201055554444',
+        },
+        delivery: { method: 'pickup' },
+        paymentMethod: 'bank_transfer',
+      });
+
+      expect(firstResult.success).toBe(true);
+      expect(firstResult.order.id).toBeDefined();
+      expect(firstResult.orderNumber).toMatch(/^MWH-\d{4}-\d+/);
+      expect(firstResult.isIdempotentReplay).toBeFalsy();
+      cleanupOrderIds.push(firstResult.order.id);
+      cleanupUserIds.push(firstResult.customerId);
+
+      // Verify cart in PostgreSQL is now empty and marked purchased
+      const cartAfterFirstCommit = await payload.findByID({
+        collection: 'carts',
+        id: cart.id,
+      });
+      expect(cartAfterFirstCommit.items).toEqual([]);
+      expect(cartAfterFirstCommit.purchasedAt).toBeDefined();
+
+      // 2. Client retry simulation (response was dropped in transit, client retries with same cart / idempotencyKey)
+      const secondResult = await createOrderFromCart(payload, {
+        cartId: cart.id, guestSecret: cart.secret,
+        idempotencyKey,
+        customer: {
+          email: clientOrderEmail,
+          password: 'SecurePassword2026!',
+          companyName: 'Lost Network Recovery Corp',
+          contactPerson: 'Youssef Chahine',
+          phone: '+201055554444',
+        },
+        delivery: { method: 'pickup' },
+        paymentMethod: 'bank_transfer',
+      });
+
+      // Must succeed and return the EXACT same order without throwing EMPTY_CART
+      expect(secondResult.success).toBe(true);
+      expect(secondResult.order.id).toBe(firstResult.order.id);
+      expect(secondResult.orderNumber).toBe(firstResult.orderNumber);
+      expect(secondResult.isIdempotentReplay).toBe(true);
+
+      // 3. Test retry via API route layer with signed cart cookie
+      const signedCookie = signCartId(cart.id);
+      const retryReq = new NextRequest('http://localhost:3000/api/checkout/create-order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify({
+          customer: {
+            email: clientOrderEmail,
+            companyName: 'Lost Network Recovery Corp',
+            contactPerson: 'Youssef Chahine',
+            phone: '+201055554444',
+          },
+          delivery: { method: 'pickup' },
+          paymentMethod: 'bank_transfer',
+        }),
+      });
+
+      const retryRes = await checkoutRoute(retryReq);
+      expect(retryRes.status).toBe(200); // 200 OK for idempotent replayed order
+
+      const retryData = await retryRes.json();
+      expect(retryData.success).toBe(true);
+      expect(retryData.orderId).toBe(firstResult.order.id);
+      expect(retryData.orderNumber).toBe(firstResult.orderNumber);
+      expect(retryData.isIdempotentReplay).toBe(true);
+
+      // 4. Verify in PostgreSQL that only ONE order exists for this cart
+      const existingOrders = await payload.find({
+        collection: 'orders',
+        where: {
+          cart: { equals: cart.id },
+        },
+      });
+      expect(existingOrders.totalDocs).toBe(1);
     });
   });
 });

@@ -840,6 +840,14 @@ export interface Order {
   amount?: number | null;
   currency?: 'EGP' | null;
   orderNumber?: string | null;
+  /**
+   * Active cart session linked to this placed order for ambiguous recovery
+   */
+  cart?: (number | null) | Cart;
+  /**
+   * Checkout idempotency key for network retry deduplication
+   */
+  idempotencyKey?: string | null;
   deliveryMethod?: ('shipping' | 'pickup') | null;
   /**
    * Fulfillment instructions or office pickup notes
@@ -1941,6 +1949,8 @@ export interface OrdersSelect<T extends boolean = true> {
   amount?: T;
   currency?: T;
   orderNumber?: T;
+  cart?: T;
+  idempotencyKey?: T;
   deliveryMethod?: T;
   fulfillmentNotes?: T;
   companyName?: T;

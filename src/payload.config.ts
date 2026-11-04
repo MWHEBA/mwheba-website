@@ -269,6 +269,23 @@ export default buildConfig({
                 },
               },
               {
+                name: 'cart',
+                type: 'relationship',
+                relationTo: 'carts',
+                index: true,
+                admin: {
+                  description: 'Active cart session linked to this placed order for ambiguous recovery',
+                },
+              },
+              {
+                name: 'idempotencyKey',
+                type: 'text',
+                index: true,
+                admin: {
+                  description: 'Checkout idempotency key for network retry deduplication',
+                },
+              },
+              {
                 name: 'deliveryMethod',
                 type: 'select',
                 defaultValue: 'shipping',
