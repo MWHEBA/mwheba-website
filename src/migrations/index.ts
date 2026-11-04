@@ -10,6 +10,7 @@ import * as migration_20261103_160000_add_cart_idempotency from './20261103_1600
 import * as migration_20261103_170000_preserve_guest_secrets_and_schema from './20261103_170000_preserve_guest_secrets_and_schema';
 import * as migration_20261104_080000_add_artwork_assets_b2b from './20261104_080000_add_artwork_assets_b2b';
 import * as migration_20261104_083000_update_artwork_scan_status_default from './20261104_083000_update_artwork_scan_status_default';
+import * as migration_20261104_090000_add_order_snapshots_b2b from './20261104_090000_add_order_snapshots_b2b';
 
 export const migrations = [
   {
@@ -71,5 +72,10 @@ export const migrations = [
     up: migration_20261104_083000_update_artwork_scan_status_default.up,
     down: migration_20261104_083000_update_artwork_scan_status_default.down,
     name: '20261104_083000_update_artwork_scan_status_default',
+  },
+  {
+    up: migration_20261104_090000_add_order_snapshots_b2b.up,
+    down: migration_20261104_090000_add_order_snapshots_b2b.down,
+    name: '20261104_090000_add_order_snapshots_b2b',
   },
 ];

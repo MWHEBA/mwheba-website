@@ -20,17 +20,17 @@ export const ArtworkAssets: CollectionConfig = {
     },
     // Creation restricted to trusted upload route (req.context.isTrustedUpload) or super_admin
     create: ({ req }) => {
-      if (req.context?.isTrustedUpload) return true;
+      if (req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow) return true;
       return hasRole(req.user, ['super_admin']);
     },
-    // Direct modification via Payload API is strictly restricted to operations and super_admin
+    // Direct modification via Payload API is strictly restricted to operations, super_admin, or trusted order workflow
     // Customers can NEVER directly update artwork records (must not tamper with storageKey, scanStatus, etc.)
     update: ({ req }) => {
-      if (req.context?.isTrustedUpload) return true;
+      if (req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow) return true;
       return hasRole(req.user, ['super_admin', 'operations']);
     },
     delete: ({ req }) => {
-      if (req.context?.isTrustedUpload) return true;
+      if (req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow) return true;
       return hasRole(req.user, ['super_admin']);
     },
   },
@@ -85,8 +85,8 @@ export const ArtworkAssets: CollectionConfig = {
         { label: 'Corrupt / Invalid', value: 'invalid' },
       ],
       access: {
-        create: ({ req }) => Boolean(req.context?.isTrustedUpload || hasRole(req.user, ['super_admin'])),
-        update: ({ req }) => Boolean(req.context?.isTrustedUpload || hasRole(req.user, ['super_admin', 'operations'])),
+        create: ({ req }) => Boolean(req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow || hasRole(req.user, ['super_admin'])),
+        update: ({ req }) => Boolean(req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow || hasRole(req.user, ['super_admin', 'operations'])),
       },
     },
     {
@@ -116,8 +116,8 @@ export const ArtworkAssets: CollectionConfig = {
         { label: 'Archived', value: 'archived' },
       ],
       access: {
-        create: ({ req }) => Boolean(req.context?.isTrustedUpload || hasRole(req.user, ['super_admin'])),
-        update: ({ req }) => Boolean(req.context?.isTrustedUpload || hasRole(req.user, ['super_admin', 'operations'])),
+        create: ({ req }) => Boolean(req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow || hasRole(req.user, ['super_admin'])),
+        update: ({ req }) => Boolean(req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow || hasRole(req.user, ['super_admin', 'operations'])),
       },
       admin: {
         description: 'Lifecycle status of the artwork asset (pending_order until checkout freezes it).',
@@ -180,8 +180,8 @@ export const ArtworkAssets: CollectionConfig = {
         { label: 'Flagged', value: 'flagged' },
       ],
       access: {
-        create: ({ req }) => Boolean(req.context?.isTrustedUpload || hasRole(req.user, ['super_admin'])),
-        update: ({ req }) => Boolean(req.context?.isTrustedUpload || hasRole(req.user, ['super_admin', 'operations'])),
+        create: ({ req }) => Boolean(req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow || hasRole(req.user, ['super_admin'])),
+        update: ({ req }) => Boolean(req.context?.isTrustedUpload || req.context?.isTrustedOrderWorkflow || hasRole(req.user, ['super_admin', 'operations'])),
       },
       admin: {
         description: 'Antivirus and malware content inspection scan status.',
@@ -203,7 +203,7 @@ export const ArtworkAssets: CollectionConfig = {
 
         // Direct updates must be trusted context or super_admin / operations
         if (operation === 'update') {
-          if (!req.context?.isTrustedUpload && !hasRole(req.user, ['super_admin', 'operations'])) {
+          if (!req.context?.isTrustedUpload && !req.context?.isTrustedOrderWorkflow && !hasRole(req.user, ['super_admin', 'operations'])) {
             throw new Error('Forbidden: Direct updates to artwork assets are restricted.');
           }
 

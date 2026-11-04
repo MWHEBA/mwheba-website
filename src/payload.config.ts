@@ -192,6 +192,21 @@ export default buildConfig({
           if (itemsField && Array.isArray(itemsField.fields)) {
             itemsField.fields.push(
               {
+                name: 'productTitle',
+                type: 'text',
+                admin: { description: 'Frozen product title at order placement' },
+              },
+              {
+                name: 'variantTitle',
+                type: 'text',
+                admin: { description: 'Frozen variant title at order placement' },
+              },
+              {
+                name: 'sku',
+                type: 'text',
+                admin: { description: 'Frozen SKU at order placement' },
+              },
+              {
                 name: 'artworkAssetId',
                 type: 'text',
                 admin: { description: 'Attached customer vector logo / artwork reference (D-016)' },
@@ -243,6 +258,46 @@ export default buildConfig({
             ...defaultCollection,
             fields: [
               ...defaultCollection.fields,
+              {
+                name: 'orderNumber',
+                type: 'text',
+                unique: true,
+                index: true,
+                admin: {
+                  position: 'sidebar',
+                  readOnly: true,
+                },
+              },
+              {
+                name: 'deliveryMethod',
+                type: 'select',
+                defaultValue: 'shipping',
+                options: [
+                  { label: 'Standard Shipping', value: 'shipping' },
+                  { label: 'Agency Office Pickup', value: 'pickup' },
+                ],
+              },
+              {
+                name: 'fulfillmentNotes',
+                type: 'textarea',
+                admin: { description: 'Fulfillment instructions or office pickup notes' },
+              },
+              {
+                name: 'companyName',
+                type: 'text',
+              },
+              {
+                name: 'contactPerson',
+                type: 'text',
+              },
+              {
+                name: 'phone',
+                type: 'text',
+              },
+              {
+                name: 'taxId',
+                type: 'text',
+              },
               {
                 name: 'orderStatus',
                 type: 'select',
@@ -715,9 +770,9 @@ export default buildConfig({
                     data.remittanceStatus = 'pending_collection';
                     data.orderStatus = 'confirmed';
                   } else if (data.paymentMethod === 'bank_transfer') {
-                    data.paymentStatus = 'pending_verification';
+                    data.paymentStatus = data.paymentStatus || 'unpaid';
                     data.remittanceStatus = 'not_applicable';
-                    data.orderStatus = 'pending';
+                    data.orderStatus = data.orderStatus || 'pending';
                   }
 
                   const hasCustomization = data.items.some((item: any) => Boolean(item.artworkAssetId || item.printingNotes));
@@ -733,10 +788,11 @@ export default buildConfig({
                     const prod = productMap.get(prodId);
 
                     let unitPrice = 0;
+                    let variantDoc: any = undefined;
                     // Check variant pricing first
                     if (item.variant) {
                       const varId = typeof item.variant === 'object' && item.variant !== null ? item.variant.id : item.variant;
-                      const variantDoc = variantMap.get(varId);
+                      variantDoc = variantMap.get(varId);
                       if (variantDoc) {
                         if (typeof variantDoc.priceInEGP === 'number') {
                           unitPrice = variantDoc.priceInEGP;
@@ -759,6 +815,9 @@ export default buildConfig({
                     const lineTotal = lineBase + lineCustomization;
 
                     // Freeze values onto the persisted line item
+                    item.productTitle = prod.title || '';
+                    item.variantTitle = variantDoc?.title || '';
+                    item.sku = variantDoc?.sku || prod.sku || '';
                     item.unitPrice = unitPrice;
                     item.customizationFee = feePerUnit;
                     item.lineTotal = lineTotal;
@@ -776,9 +835,38 @@ export default buildConfig({
                   data.shippingFee = shippingFee;
                   data.amount = grandTotal;
                   data.total = grandTotal;
-                  if (!data.paymentStatus) {
-                    data.paymentStatus = 'pending';
+
+                  if (data.deliveryMethod === 'pickup') {
+                    if (!data.fulfillmentNotes || !data.fulfillmentNotes.includes('Office Pickup')) {
+                      data.fulfillmentNotes = data.fulfillmentNotes ? `${data.fulfillmentNotes} (Office Pickup)` : 'Office Pickup';
+                    }
                   }
+
+                  if (!data.orderNumber) {
+                    try {
+                      const pool = (req.payload?.db as any)?.pool;
+                      if (pool) {
+                        const seqRes = await pool.query("SELECT nextval('order_number_seq') AS seq");
+                        const seq = seqRes.rows[0]?.seq || Math.floor(10000 + Math.random() * 90000);
+                        data.orderNumber = `MWH-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`;
+                      } else {
+                        data.orderNumber = `MWH-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+                      }
+                    } catch {
+                      data.orderNumber = `MWH-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
+                    }
+                  }
+
+                  if (!data.orderStatus) {
+                    data.orderStatus = 'pending';
+                  }
+                  if (!data.paymentStatus) {
+                    data.paymentStatus = 'unpaid';
+                  }
+                  if (!data.fulfillmentStatus) {
+                    data.fulfillmentStatus = 'unfulfilled';
+                  }
+
                   if (!data.auditLog || data.auditLog.length === 0) {
                     data.auditLog = [
                       {

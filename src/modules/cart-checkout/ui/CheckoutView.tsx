@@ -22,30 +22,76 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
+  // Shipping Address Fields
+  const [governorate, setGovernorate] = useState('القاهرة (Cairo)');
+  const [city, setCity] = useState('');
+  const [streetAddress, setStreetAddress] = useState('');
+  const [buildingDetails, setBuildingDetails] = useState('');
+  const [fulfillmentNotes, setFulfillmentNotes] = useState('');
+
   // Toggles
   const [deliveryMethod, setDeliveryMethod] = useState<'shipping' | 'pickup'>('shipping');
   const [paymentMethod, setPaymentMethod] = useState<'bank_transfer' | 'cod' | 'paymob'>('bank_transfer');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isOrderPlaced, setIsOrderPlaced] = useState(false);
+  const [placedOrder, setPlacedOrder] = useState<any>(null);
+  const [orderError, setOrderError] = useState<string | null>(null);
 
   const handleDeliveryChange = (method: 'shipping' | 'pickup') => {
     setDeliveryMethod(method);
     setShippingFee(method === 'shipping' ? 150 : 0);
   };
 
-  const handleSubmitOrder = (e: React.FormEvent) => {
+  const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!calculation.canCheckout) return;
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      setIsSubmitting(false);
+    setOrderError(null);
+
+    try {
+      const res = await fetch('/api/checkout/create-order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customer: {
+            email,
+            password,
+            companyName,
+            contactPerson: contactName,
+            phone,
+            taxId,
+          },
+          delivery: {
+            method: deliveryMethod,
+            shippingAddress: deliveryMethod === 'shipping' ? {
+              governorate,
+              city,
+              streetAddress,
+              buildingDetails,
+            } : undefined,
+            fulfillmentNotes,
+          },
+          paymentMethod: paymentMethod === 'paymob' ? 'bank_transfer' : paymentMethod,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to place order');
+      }
+
+      setPlacedOrder(data);
       setIsOrderPlaced(true);
-      // Cart items intentionally preserved for testing per owner directive (do NOT clear cart)
-    }, 800);
+      clearCart();
+    } catch (err: any) {
+      setOrderError(err.message || 'An unexpected error occurred during checkout');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  if (isOrderPlaced) {
+  if (isOrderPlaced && placedOrder) {
     return (
       <div className="container" style={{ paddingBlock: '5rem 7rem', maxWidth: '740px', textAlign: 'center' }}>
         <div
@@ -53,31 +99,31 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
             width: '72px',
             height: '72px',
             borderRadius: 'var(--radius-full)',
-            backgroundColor: 'var(--status-info-bg)',
-            color: 'var(--brand-primary)',
+            backgroundColor: 'var(--status-success-bg)',
+            color: 'var(--status-success)',
             fontSize: '2rem',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             margin: '0 auto 1.5rem',
-            border: '2px solid var(--brand-primary)',
+            border: '2px solid var(--status-success)',
           }}
         >
-          ℹ️
+          ✓
         </div>
 
         <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          {isArabic ? 'محاكاة تجربة إتمام الشراء المؤسسي (UI Simulation Mode)' : 'B2B Checkout Experience Simulation'}
+          {isArabic ? 'تم اعتماد وتأكيد أمر الشراء المؤسسي بنجاح' : 'Corporate Order Placed Successfully'}
         </span>
 
         <h1 style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--brand-primary-dark)', margin: '0.5rem 0 1rem' }}>
-          {isArabic ? 'تمت تجربة تدفق إتمام الطلب بنجاح (محاكاة فقط)' : 'Checkout Simulation Flow Completed (Simulation Only)'}
+          {placedOrder.orderNumber}
         </h1>
 
         <p style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem', lineHeight: 1.7, marginBottom: '2rem' }}>
           {isArabic
-            ? 'هذه محاكاة تفاعلية لواجهة المستخدم لاختبار تجربة الشراء والتأكد من استيفاء الـ MOQ. لم يتم تسجيل أو خصم أي مبالغ أو إنشاء طلب حقيقي بقاعدة البيانات، وتم الاحتفاظ ببيانات السلة كاملة لمتابعة التجارب. الربط الفعلي مع قواعد البيانات وبوابات الدفع محدد في المرحلتين 6 و 7.'
-            : 'This is an interactive UI simulation to validate the B2B checkout experience and MOQ governance. No actual order has been created in the database, and your cart items are preserved for further testing. Live transactional order processing is scheduled for Phases 6 & 7.'}
+            ? 'تم حفظ وتسجيل تفاصيل طلبكم وتجميد الأسعار ورسوم الطباعة بدقة داخل النظام، وربط ملفات الشعار المرفقة بالطلب.'
+            : 'Your order snapshot, pricing, customization fees, and uploaded assets have been securely frozen in the database.'}
         </p>
 
         <div
@@ -91,54 +137,46 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'طبيعة العملية:' : 'Operation Mode:'}</span>
-            <span style={{ fontWeight: 700, color: 'var(--brand-primary-dark)' }}>
-              {isArabic ? 'محاكاة واجهة (Simulation Only - لا يوجد طلب حقيقي)' : 'Front-end Simulation (No Real Order)'}
-            </span>
+            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'رقم الطلب الرسمي:' : 'Order Number:'}</span>
+            <span style={{ fontWeight: 700, color: 'var(--brand-primary-dark)' }}>{placedOrder.orderNumber}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
             <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'الجهة المتعاقدة:' : 'Corporate Entity:'}</span>
-            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{companyName || (isArabic ? 'جهة تجريبية' : 'Test Company')}</span>
+            <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{companyName}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'طريقة الاستلام المختارة:' : 'Fulfillment:'}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'طريقة الاستلام:' : 'Fulfillment:'}</span>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
               {deliveryMethod === 'shipping'
-                ? (isArabic ? 'شحن وتوصيل لمقر الشركة (150 ج.م تقديري طبقاً لـ D-015)' : 'Corporate Courier Delivery (150 EGP estimate per D-015)')
-                : (isArabic ? 'استلام مباشر من مقر وكالة موهبة (مجاني)' : 'Office Pickup from MWHEBA Headquarters (Free)')}
+                ? (isArabic ? `شحن وتوصيل لمقر الشركة (${city || 'القاهرة'})` : `Corporate Delivery (${city || 'Cairo'})`)
+                : (isArabic ? 'استلام مباشر من مقر وكالة موهبة (مجاني)' : 'Office Pickup from MWHEBA Agency Office (Free)')}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'طريقة السداد المختارة:' : 'Payment:'}</span>
+            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'طريقة السداد:' : 'Payment Method:'}</span>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
               {paymentMethod === 'bank_transfer'
-                ? (isArabic ? 'تحويل بنكي رسمي للشركات (معتمد D-007)' : 'Corporate Bank Transfer (Confirmed D-007)')
-                : paymentMethod === 'cod'
-                ? (isArabic ? 'الدفع عند الاستلام (معتمد D-007)' : 'Cash on Delivery (Confirmed D-007)')
-                : (isArabic ? 'بوابة الدفع الإلكتروني Paymob (مؤجل للمرحلة 6)' : 'Paymob Gateway (Phase 6 Candidate)')}
+                ? (isArabic ? 'تحويل بنكي رسمي للشركات' : 'Corporate Bank Transfer')
+                : (isArabic ? 'الدفع عند الاستلام (COD)' : 'Cash on Delivery')}
             </span>
           </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'حالة الطلب:' : 'Order Status:'}</span>
+            <Badge variant="info">{placedOrder.status || 'pending'}</Badge>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'حالة السداد:' : 'Payment Status:'}</span>
+            <Badge variant="warning">{placedOrder.paymentStatus || 'unpaid'}</Badge>
+          </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'حالة السلة:' : 'Cart State:'}</span>
-            <span style={{ fontWeight: 600, color: 'var(--status-success)' }}>
-              {isArabic ? '✓ محفوظة كما هي لأغراض المراجعة والتجربة' : '✓ Preserved for further testing and review'}
+            <span style={{ color: 'var(--text-muted)' }}>{isArabic ? 'الإجمالي النهائي المجمد:' : 'Frozen Grand Total:'}</span>
+            <span style={{ fontWeight: 700, color: 'var(--brand-primary-dark)', fontSize: '1.125rem' }}>
+              {placedOrder.total ? `${Number(placedOrder.total).toLocaleString()} ${isArabic ? 'ج.م' : 'EGP'}` : ''}
             </span>
           </div>
         </div>
 
         <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => setIsOrderPlaced(false)}
-            className="btn-secondary"
-            style={{
-              padding: '0.85rem 1.75rem',
-              fontWeight: 700,
-              borderRadius: 'var(--radius-sm)',
-            }}
-          >
-            {isArabic ? '← العودة لمراجعة نموذج الـ Checkout' : '← Return to Checkout Form'}
-          </button>
           <Link
             href={isArabic ? '/ar/store' : '/en/store'}
             className="btn-primary"
@@ -150,7 +188,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
               borderRadius: 'var(--radius-sm)',
             }}
           >
-            {isArabic ? 'متابعة تصفح المتجر التجريبي ←' : 'Continue Store Browsing →'}
+            {isArabic ? 'متابعة تصفح المتجر والخدمات ←' : 'Return to Catalog →'}
           </Link>
         </div>
       </div>
@@ -166,24 +204,6 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
         <h1 style={{ fontSize: 'clamp(1.85rem, 3vw, 2.5rem)', fontWeight: 700, color: 'var(--brand-primary-dark)', margin: '0.35rem 0 1rem' }}>
           {isArabic ? 'إتمام طلب الشراء المؤسسي (B2B)' : 'Corporate Order Checkout'}
         </h1>
-
-        {/* Phase 3 UI Specimen & Commercial Parameters Notice */}
-        <div
-          style={{
-            padding: '0.75rem 1rem',
-            backgroundColor: 'var(--status-info-bg)',
-            border: '1px solid var(--border-default)',
-            borderRadius: 'var(--radius-sm)',
-            fontSize: '0.8125rem',
-            color: 'var(--brand-primary-dark)',
-            lineHeight: 1.6,
-          }}
-        >
-          <strong>ℹ️ {isArabic ? 'ملاحظة توضيحية لنموذج الواجهة (Phase 3 Specimen):' : 'Phase 3 UI Specimen Notice:'}</strong>{' '}
-          {isArabic
-            ? 'هذه الشاشة تمثل نموذج واجهة تفاعلية تجريبية لتجربة رحلة الشراء وحوكمة الـ MOQ. تكامل قواعد البيانات الفعلي وتوليد أوامر الشراء الدائمة وبوابات الدفع محدد في المرحلتين 6 و 7 طبقاً لوثيقة القرارات DECISIONS.md (D-007, D-008, D-015).'
-            : 'This page is an interactive design specimen for validating B2B ordering and MOQ governance. Transactional database order creation and payment gateways are formally scheduled for Phases 6 & 7 per DECISIONS.md (D-007, D-008, D-015).'}
-        </div>
       </header>
 
       {/* If cart empty or MOQ not satisfied */}
@@ -407,6 +427,77 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                   </div>
                 </label>
               </div>
+
+              {/* Delivery Address Fields for Corporate Shipping */}
+              {deliveryMethod === 'shipping' && (
+                <div style={{ marginTop: '1.25rem', padding: '1rem', borderRadius: 'var(--radius-sm)', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-default)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)', marginBottom: '0.25rem' }}>
+                      {isArabic ? 'المحافظة *' : 'Governorate *'}
+                    </label>
+                    <input
+                      type="text"
+                      required={deliveryMethod === 'shipping'}
+                      value={governorate}
+                      onChange={(e) => setGovernorate(e.target.value)}
+                      placeholder={isArabic ? 'القاهرة' : 'Cairo'}
+                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)', marginBottom: '0.25rem' }}>
+                      {isArabic ? 'المدينة / المنطقة *' : 'City / District *'}
+                    </label>
+                    <input
+                      type="text"
+                      required={deliveryMethod === 'shipping'}
+                      value={city}
+                      onChange={(e) => setCity(e.target.value)}
+                      placeholder={isArabic ? 'المعادي / التجمع الخامس' : 'Maadi / New Cairo'}
+                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}
+                    />
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)', marginBottom: '0.25rem' }}>
+                      {isArabic ? 'اسم الشارع ومقر الشركة التفصيلي *' : 'Street Address *'}
+                    </label>
+                    <input
+                      type="text"
+                      required={deliveryMethod === 'shipping'}
+                      value={streetAddress}
+                      onChange={(e) => setStreetAddress(e.target.value)}
+                      placeholder={isArabic ? 'شارع التسعين، مجمع الأعمال، مبنى A' : '90th St, Business Complex, Building A'}
+                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}
+                    />
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)', marginBottom: '0.25rem' }}>
+                      {isArabic ? 'تفاصيل المبنى / الطابق / رقم المكتب (اختياري)' : 'Building / Floor / Office (Optional)'}
+                    </label>
+                    <input
+                      type="text"
+                      value={buildingDetails}
+                      onChange={(e) => setBuildingDetails(e.target.value)}
+                      placeholder={isArabic ? 'الطابق الثالث، مكتب 301' : '3rd Floor, Suite 301'}
+                      style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Fulfillment Notes */}
+              <div style={{ marginTop: '1rem' }}>
+                <label style={{ display: 'block', fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)', marginBottom: '0.25rem' }}>
+                  {isArabic ? 'ملاحظات وتوجيهات الاستلام / التوصيل (اختياري)' : 'Fulfillment & Delivery Notes (Optional)'}
+                </label>
+                <textarea
+                  rows={2}
+                  value={fulfillmentNotes}
+                  onChange={(e) => setFulfillmentNotes(e.target.value)}
+                  placeholder={isArabic ? 'أي تعليمات خاصة بالاستلام أو مواعيد التسليم المفضلة...' : 'Any specific delivery instructions or preferred pickup time...'}
+                  style={{ width: '100%', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}
+                />
+              </div>
             </div>
 
             {/* 4. Payment Method Selection */}
@@ -612,6 +703,25 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
               </div>
             </div>
 
+            {/* Error Message Display */}
+            {orderError && (
+              <div
+                style={{
+                  marginTop: '1.25rem',
+                  padding: '1rem',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--status-error-bg)',
+                  border: '1px solid var(--status-error)',
+                  color: 'var(--status-error)',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  lineHeight: 1.5,
+                }}
+              >
+                ⚠️ {orderError}
+              </div>
+            )}
+
             {/* Submit Action */}
             <div style={{ marginTop: '1.5rem' }}>
               <Button
@@ -620,15 +730,15 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                 type="submit"
                 disabled={!calculation.canCheckout}
                 loading={isSubmitting}
-                loadingText={isArabic ? 'جاري معالجة المحاكاة...' : 'Processing Simulation...'}
+                loadingText={isArabic ? 'جاري تأكيد وتسجيل الطلب...' : 'Processing Order...'}
                 style={{ width: '100%', fontWeight: 700 }}
               >
-                {isArabic ? 'تجربة محاكاة إتمام الطلب (Simulation) ←' : 'Test Checkout Simulation Flow →'}
+                {isArabic ? 'تأكيد أمر الشراء المؤسسي (B2B) ←' : 'Confirm B2B Corporate Order →'}
               </Button>
             </div>
 
             <div style={{ marginTop: '1rem', textAlign: 'center', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-              ℹ️ {isArabic ? 'نموذج محاكاة واجهة تفاعلية - لا يتم خصم أموال أو تسجيل طلب فعلي' : 'Interactive UI Simulation - No real order or charge is executed'}
+              🔒 {isArabic ? 'عملية شراء مشفرة وآمنة وفق ضوابط التعاقد المؤسسي D-007 و D-013' : 'Secure corporate order process compliant with D-007 & D-013'}
             </div>
           </div>
         </div>

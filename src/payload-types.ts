@@ -777,6 +777,18 @@ export interface Order {
         variant?: (number | null) | Variant;
         quantity: number;
         /**
+         * Frozen product title at order placement
+         */
+        productTitle?: string | null;
+        /**
+         * Frozen variant title at order placement
+         */
+        variantTitle?: string | null;
+        /**
+         * Frozen SKU at order placement
+         */
+        sku?: string | null;
+        /**
          * Attached customer vector logo / artwork reference (D-016)
          */
         artworkAssetId?: string | null;
@@ -827,6 +839,16 @@ export interface Order {
   status?: OrderStatus;
   amount?: number | null;
   currency?: 'EGP' | null;
+  orderNumber?: string | null;
+  deliveryMethod?: ('shipping' | 'pickup') | null;
+  /**
+   * Fulfillment instructions or office pickup notes
+   */
+  fulfillmentNotes?: string | null;
+  companyName?: string | null;
+  contactPerson?: string | null;
+  phone?: string | null;
+  taxId?: string | null;
   orderStatus?: ('draft' | 'pending' | 'confirmed' | 'processing' | 'completed' | 'cancelled') | null;
   paymentStatus?: ('pending' | 'unpaid' | 'pending_verification' | 'paid' | 'failed' | 'cancelled' | 'refunded') | null;
   paymentMethod?: ('cod' | 'bank_transfer' | 'paymob') | null;
@@ -1884,6 +1906,9 @@ export interface OrdersSelect<T extends boolean = true> {
         product?: T;
         variant?: T;
         quantity?: T;
+        productTitle?: T;
+        variantTitle?: T;
+        sku?: T;
         artworkAssetId?: T;
         artworkStorageKey?: T;
         artworkOriginalFilename?: T;
@@ -1915,6 +1940,13 @@ export interface OrdersSelect<T extends boolean = true> {
   status?: T;
   amount?: T;
   currency?: T;
+  orderNumber?: T;
+  deliveryMethod?: T;
+  fulfillmentNotes?: T;
+  companyName?: T;
+  contactPerson?: T;
+  phone?: T;
+  taxId?: T;
   orderStatus?: T;
   paymentStatus?: T;
   paymentMethod?: T;

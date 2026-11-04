@@ -1,0 +1,114 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getPayload } from 'payload';
+import configPromise from '@/payload.config';
+import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
+import { CART_COOKIE_NAME } from '@/modules/cart-checkout/services/cartStorage';
+import { createOrderFromCart } from '@/modules/orders/services/orderService';
+
+export async function POST(req: NextRequest) {
+  try {
+    const payload = await getPayload({ config: configPromise });
+
+    // 1. Resolve user if authenticated
+    let user: any = null;
+    try {
+      const auth = await payload.auth({ headers: req.headers });
+      if (auth?.user) {
+        user = auth.user;
+      }
+    } catch {
+      // Unauthenticated guest
+    }
+
+    // 2. Resolve active cart
+    const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
+    const sessionCartId = readCartId(cookieVal);
+    let cart: any = null;
+
+    if (sessionCartId) {
+      cart = await payload.findByID({
+        collection: 'carts',
+        id: sessionCartId,
+        depth: 0,
+      });
+    }
+
+    if (!cart && user?.id) {
+      const userCarts = await payload.find({
+        collection: 'carts',
+        where: { customer: { equals: user.id } },
+        limit: 1,
+        depth: 0,
+      });
+      if (userCarts.docs?.[0]) {
+        cart = userCarts.docs[0];
+      }
+    }
+
+    const guestSecret = req.headers.get('x-guest-secret');
+    if (!cart && guestSecret) {
+      const guestCarts = await payload.find({
+        collection: 'carts',
+        where: { secret: { equals: guestSecret } },
+        limit: 1,
+        depth: 0,
+      });
+      if (guestCarts.docs?.[0]) {
+        cart = guestCarts.docs[0];
+      }
+    }
+
+    if (!cart) {
+      return NextResponse.json(
+        { success: false, error: 'NO_ACTIVE_CART: No active cart session was found for this checkout request.' },
+        { status: 404 }
+      );
+    }
+
+    // 3. Parse checkout payload
+    const body = await req.json();
+    const { customer, delivery, paymentMethod } = body;
+
+    if (!customer || !delivery || !paymentMethod) {
+      return NextResponse.json(
+        { success: false, error: 'INVALID_PAYLOAD: customer, delivery, and paymentMethod are required.' },
+        { status: 400 }
+      );
+    }
+
+    // 4. Create order atomically inside PostgreSQL transaction
+    const result = await createOrderFromCart(payload, {
+      cartId: cart.id,
+      guestSecret: cart.secret,
+      user,
+      customer,
+      delivery,
+      paymentMethod,
+    });
+
+    const response = NextResponse.json(
+      {
+        success: true,
+        orderId: result.order.id,
+        orderNumber: result.orderNumber,
+        customerId: result.customerId,
+        userCreated: result.userCreated,
+        total: result.order.total || result.order.amount,
+        status: result.order.orderStatus,
+        paymentStatus: result.order.paymentStatus,
+      },
+      { status: 201 }
+    );
+
+    return response;
+  } catch (error: any) {
+    const statusCode = error.statusCode || 400;
+    return NextResponse.json(
+      {
+        success: false,
+        error: error.message || 'ORDER_CREATION_FAILED',
+      },
+      { status: statusCode }
+    );
+  }
+}
