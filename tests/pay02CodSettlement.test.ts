@@ -886,4 +886,127 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
       cleanup.remittances.push(body.remittanceId);
     });
   });
+
+  // ===========================================================================
+  // 6. Direct Admin/API Financial Record Mutation Protection (Security Lockdown)
+  // ===========================================================================
+  describe('6. Direct Admin/API Financial Record Mutation Protection (Security Lockdown)', () => {
+    it('blocks direct manual creation of PaymentCollection via Admin/API without isCodCollectionEngine (DIRECT_COLLECTION_CREATION_FORBIDDEN)', async () => {
+      const order = await createTestCodOrder();
+      const receipt = `REC_DIRECT_FAIL_${unique()}`;
+
+      await expect(
+        payload.create({
+          collection: 'payment-collections',
+          data: {
+            receiptReference: receipt,
+            order: order.id,
+            amount: order.total,
+            collectorType: 'courier',
+            collectorName: 'Malicious Manual Input',
+            collectedAt: new Date().toISOString(),
+          },
+          overrideAccess: true,
+          // no context flag provided!
+        })
+      ).rejects.toThrow('DIRECT_COLLECTION_CREATION_FORBIDDEN');
+    });
+
+    it('blocks direct manual mutation of amount or remittanceStatus on an existing PaymentCollection (DIRECT_COLLECTION_MUTATION_FORBIDDEN)', async () => {
+      const order = await createTestCodOrder();
+      const col = await recordCodCollection(payload, {
+        orderId: order.id,
+        collectedAmount: order.total,
+        collectorType: 'courier',
+        collectorName: 'Legitimate Courier',
+        receiptReference: `REC_${unique()}`,
+        actor: { id: opsUser.id, roles: opsUser.roles },
+      });
+      cleanup.collections.push(col.collectionId);
+
+      // Attempt manual update of amount without remittance engine context
+      await expect(
+        payload.update({
+          collection: 'payment-collections',
+          id: col.collectionId,
+          data: {
+            amount: 999999, // tampered amount
+          },
+          overrideAccess: true,
+          // no context flag provided!
+        })
+      ).rejects.toThrow('DIRECT_COLLECTION_MUTATION_FORBIDDEN');
+
+      // Attempt manual update of remittanceStatus without remittance engine context
+      await expect(
+        payload.update({
+          collection: 'payment-collections',
+          id: col.collectionId,
+          data: {
+            remittanceStatus: 'remitted_to_company',
+          },
+          overrideAccess: true,
+        })
+      ).rejects.toThrow('DIRECT_COLLECTION_MUTATION_FORBIDDEN');
+    });
+
+    it('blocks direct manual creation of CourierRemittance via Admin/API without isCourierRemittanceEngine (DIRECT_REMITTANCE_CREATION_FORBIDDEN)', async () => {
+      const order = await createTestCodOrder();
+
+      await expect(
+        payload.create({
+          collection: 'courier-remittances',
+          data: {
+            batchId: `BATCH_DIRECT_${unique()}`,
+            courierCompany: 'Manual Rogue Batch',
+            grossCollectedAmount: order.total,
+            netDepositAmount: order.total,
+            depositSlipReference: 'DEP-ROGUE',
+            depositDate: new Date().toISOString(),
+            orders: [order.id],
+          },
+          overrideAccess: true,
+          // no context flag provided!
+        })
+      ).rejects.toThrow('DIRECT_REMITTANCE_CREATION_FORBIDDEN');
+    });
+
+    it('blocks mutation of an existing CourierRemittance record after reconciliation (REMITTANCE_RECORD_IMMUTABLE)', async () => {
+      const order = await createTestCodOrder();
+      const col = await recordCodCollection(payload, {
+        orderId: order.id,
+        collectedAmount: order.total,
+        collectorType: 'courier',
+        collectorName: 'Bosta',
+        receiptReference: `REC_${unique()}`,
+        actor: { id: opsUser.id, roles: opsUser.roles },
+      });
+      cleanup.collections.push(col.collectionId);
+
+      const batchId = `BATCH_IMMUT_${unique()}`;
+      const remRes = await reconcileCourierRemittanceBatch(payload, {
+        batchId,
+        courierCompany: 'Bosta',
+        orderIds: [order.id],
+        grossCollectedAmount: order.total,
+        netDepositAmount: order.total,
+        depositSlipReference: 'DEP-IMMUT',
+        depositDate: new Date().toISOString(),
+        actor: { id: financeUser.id, roles: financeUser.roles },
+      });
+      cleanup.remittances.push(remRes.remittanceId);
+
+      // Attempt to modify the reconciled batch
+      await expect(
+        payload.update({
+          collection: 'courier-remittances',
+          id: remRes.remittanceId,
+          data: {
+            netDepositAmount: 500000,
+          },
+          overrideAccess: true,
+        })
+      ).rejects.toThrow('REMITTANCE_RECORD_IMMUTABLE');
+    });
+  });
 });

@@ -365,6 +365,35 @@ export const BankTransfers: CollectionConfig = {
             }
           }
         }
+
+        if (doc.status === 'rejected' && previousDoc?.status !== 'rejected') {
+          const orderId = typeof doc.order === 'object' && doc.order !== null ? doc.order.id : doc.order;
+          if (orderId) {
+            const existingOrder = await req.payload.findByID({
+              collection: 'orders',
+              id: orderId,
+              req,
+            });
+
+            if (existingOrder && existingOrder.paymentStatus !== 'paid') {
+              const previousLogs = Array.isArray(existingOrder.auditLog) ? existingOrder.auditLog : [];
+              const reason = doc.rejectionReason || 'No reason provided';
+              const newEntry = {
+                entry: `Bank Transfer verification rejected. Reason: ${reason}. Reviewed by user #${req.user?.id} at ${new Date().toISOString()}`,
+              };
+
+              await req.payload.update({
+                collection: 'orders',
+                id: orderId,
+                data: {
+                  paymentStatus: 'failed',
+                  auditLog: [...previousLogs, newEntry],
+                },
+                req,
+              });
+            }
+          }
+        }
       },
     ],
   },

@@ -157,6 +157,39 @@ export const CommerceSettings: GlobalConfig = {
       ],
     },
     {
+      type: 'collapsible',
+      label: 'Corporate Bank Account & Wire Details (PAY-03)',
+      fields: [
+        {
+          name: 'bankDetailsStatus',
+          type: 'select',
+          defaultValue: 'pending_configuration',
+          required: true,
+          options: [
+            {
+              label: 'Pending Configuration (Pre-launch - bank coordinates coordinated upon review)',
+              value: 'pending_configuration',
+            },
+            {
+              label: 'Active (Owner Approved bank coordinates published to clients)',
+              value: 'active',
+            },
+          ],
+          admin: {
+            description:
+              'Determines whether official MWHEBA bank wire coordinates are published to customers at checkout. Pre-launch mode coordinates bank details upon invoice review to prevent exposing test data.',
+          },
+        },
+        { name: 'bankName', type: 'text', label: 'Bank Name (e.g. Commercial International Bank - CIB)' },
+        { name: 'accountName', type: 'text', label: 'Beneficiary Account Name' },
+        { name: 'accountNumber', type: 'text', label: 'Account Number' },
+        { name: 'iban', type: 'text', label: 'IBAN' },
+        { name: 'swiftCode', type: 'text', label: 'SWIFT / BIC Code' },
+        { name: 'instapayHandle', type: 'text', label: 'Instapay IPA / Handle' },
+        { name: 'bankInstructions', type: 'textarea', label: 'Payment Instructions' },
+      ],
+    },
+    {
       name: 'changeLog',
       type: 'json',
       defaultValue: [],
@@ -186,6 +219,13 @@ export const CommerceSettings: GlobalConfig = {
           'standardFallbackFee',
           'productionPolicy',
           'emailDispatchMode',
+          'bankDetailsStatus',
+          'bankName',
+          'accountName',
+          'accountNumber',
+          'iban',
+          'swiftCode',
+          'instapayHandle',
         ] as const;
 
         for (const f of trackFields) {

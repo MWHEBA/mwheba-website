@@ -11,9 +11,78 @@ export const PaymentCollections: CollectionConfig = {
   },
   access: {
     read: ({ req }) => hasRole(req.user, ['super_admin', 'finance', 'operations']),
-    create: ({ req }) => hasRole(req.user, ['super_admin', 'finance', 'operations']),
-    update: ({ req }) => hasRole(req.user, ['super_admin', 'finance']),
+    // Direct creation via Admin UI or REST API is strictly prohibited.
+    // Must be recorded through the authorized recordCodCollection settlement engine.
+    create: ({ req }) => Boolean(req.context?.isCodCollectionEngine || req.context?.isSystemSeed),
+    // Direct modification via Admin UI or REST API is strictly prohibited.
+    // Can only be updated through the authorized courier remittance engine.
+    update: ({ req }) => Boolean(req.context?.isCourierRemittanceEngine || req.context?.isSystemSeed),
     delete: () => false, // Immutable audit trail
+  },
+  hooks: {
+    beforeValidate: [
+      async ({ data, req, operation, originalDoc, context }: any) => {
+        if (!data) return data;
+
+        const isCollectionEngine = Boolean(
+          context?.isCodCollectionEngine ||
+          req?.context?.isCodCollectionEngine ||
+          context?.isSystemSeed ||
+          req?.context?.isSystemSeed
+        );
+
+        if (operation === 'create' && !isCollectionEngine) {
+          throw new Error(
+            'DIRECT_COLLECTION_CREATION_FORBIDDEN: Direct manual creation of payment collections via Admin/API is strictly prohibited. Collections must be recorded through the authorized recordCodCollection settlement engine.'
+          );
+        }
+
+        const isRemittanceEngine = Boolean(
+          context?.isCourierRemittanceEngine ||
+          req?.context?.isCourierRemittanceEngine ||
+          context?.isSystemSeed ||
+          req?.context?.isSystemSeed
+        );
+
+        if (operation === 'update') {
+          if (!isRemittanceEngine) {
+            throw new Error(
+              'DIRECT_COLLECTION_MUTATION_FORBIDDEN: Direct manual modification of payment collections via Admin/API is strictly prohibited. Collections can only be updated through the authorized courier remittance engine.'
+            );
+          }
+
+          if (originalDoc) {
+            if (data.amount !== undefined && Number(data.amount) !== Number(originalDoc.amount)) {
+              throw new Error(
+                'COLLECTION_AMOUNT_IMMUTABLE: Modifying collected cash amount on an existing collection record is strictly prohibited.'
+              );
+            }
+            if (data.order !== undefined) {
+              const origOrderId =
+                typeof originalDoc.order === 'object' && originalDoc.order !== null
+                  ? originalDoc.order.id
+                  : originalDoc.order;
+              const newOrderId =
+                typeof data.order === 'object' && data.order !== null
+                  ? data.order.id
+                  : data.order;
+              if (String(origOrderId) !== String(newOrderId)) {
+                throw new Error(
+                  'COLLECTION_ORDER_IMMUTABLE: Re-assigning collection to a different order is strictly prohibited.'
+                );
+              }
+            }
+            if (data.receiptReference !== undefined && data.receiptReference !== originalDoc.receiptReference) {
+              throw new Error(
+                'COLLECTION_RECEIPT_IMMUTABLE: Modifying receiptReference on an existing collection is strictly prohibited.'
+              );
+            }
+          }
+        }
+
+        return data;
+      },
+    ],
   },
   fields: [
     {

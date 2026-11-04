@@ -11,9 +11,36 @@ export const CourierRemittances: CollectionConfig = {
   },
   access: {
     read: ({ req }) => hasRole(req.user, ['super_admin', 'finance']),
-    create: ({ req }) => hasRole(req.user, ['super_admin', 'finance']),
-    update: ({ req }) => hasRole(req.user, ['super_admin', 'finance']),
+    // Direct creation via Admin UI or REST API is strictly prohibited.
+    // Must be processed through the reconcileCourierRemittanceBatch engine.
+    create: ({ req }) => Boolean(req.context?.isCourierRemittanceEngine || req.context?.isSystemSeed),
+    // Courier remittance batches are immutable once reconciled.
+    update: () => false,
     delete: () => false, // Financial batches are append-only / immutable
+  },
+  hooks: {
+    beforeValidate: [
+      async ({ operation, req, context }: any) => {
+        const isRemittanceEngine = Boolean(
+          context?.isCourierRemittanceEngine ||
+          req?.context?.isCourierRemittanceEngine ||
+          context?.isSystemSeed ||
+          req?.context?.isSystemSeed
+        );
+
+        if (operation === 'create' && !isRemittanceEngine) {
+          throw new Error(
+            'DIRECT_REMITTANCE_CREATION_FORBIDDEN: Direct manual creation of courier remittance batches via Admin/API is strictly prohibited. Remittances must be processed through the authorized reconcileCourierRemittanceBatch engine.'
+          );
+        }
+
+        if (operation === 'update') {
+          throw new Error(
+            'REMITTANCE_RECORD_IMMUTABLE: Courier remittance batches are immutable financial audit records and cannot be modified after reconciliation.'
+          );
+        }
+      },
+    ],
   },
   fields: [
     {

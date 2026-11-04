@@ -367,6 +367,13 @@ export async function recordCodCollection(
     const colRemittanceStatus = collectorType === 'courier' ? 'pending_remittance' : 'remitted_to_company';
 
     // 6. Create immutable PaymentCollection record inside the transaction
+    if (req) {
+      req.context = {
+        ...(req.context || {}),
+        isCodCollectionEngine: true,
+      };
+    }
+
     const collectionRecord = await payload.create({
       collection: 'payment-collections' as any,
       data: {
@@ -381,6 +388,9 @@ export async function recordCodCollection(
       },
       overrideAccess: true,
       req,
+      context: {
+        isCodCollectionEngine: true,
+      },
     });
 
     // Test hook for simulating crash / update failure
@@ -706,6 +716,13 @@ export async function reconcileCourierRemittanceBatch(
     }
 
     // 6. Create immutable CourierRemittance record inside the transaction
+    if (req) {
+      req.context = {
+        ...(req.context || {}),
+        isCourierRemittanceEngine: true,
+      };
+    }
+
     const remittanceDoc = (await payload.create({
       collection: 'courier-remittances' as any,
       data: {
@@ -725,6 +742,9 @@ export async function reconcileCourierRemittanceBatch(
       },
       overrideAccess: true,
       req,
+      context: {
+        isCourierRemittanceEngine: true,
+      },
     })) as any;
 
     // Test hook for simulating crash / update failure midway through batch updates
@@ -759,6 +779,9 @@ export async function reconcileCourierRemittanceBatch(
         },
         overrideAccess: true,
         req,
+        context: {
+          isCourierRemittanceEngine: true,
+        },
       });
     }
 

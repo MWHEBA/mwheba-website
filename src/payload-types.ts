@@ -2298,6 +2298,17 @@ export interface CommerceSetting {
   smtpUser?: string | null;
   fromEmail?: string | null;
   /**
+   * Determines whether official MWHEBA bank wire coordinates are published to customers at checkout. Pre-launch mode coordinates bank details upon invoice review to prevent exposing test data.
+   */
+  bankDetailsStatus: 'pending_configuration' | 'active';
+  bankName?: string | null;
+  accountName?: string | null;
+  accountNumber?: string | null;
+  iban?: string | null;
+  swiftCode?: string | null;
+  instapayHandle?: string | null;
+  bankInstructions?: string | null;
+  /**
    * Server-recorded append-only audit trail of operational setting adjustments.
    */
   changeLog?:
@@ -2372,6 +2383,14 @@ export interface CommerceSettingsSelect<T extends boolean = true> {
   smtpPort?: T;
   smtpUser?: T;
   fromEmail?: T;
+  bankDetailsStatus?: T;
+  bankName?: T;
+  accountName?: T;
+  accountNumber?: T;
+  iban?: T;
+  swiftCode?: T;
+  instapayHandle?: T;
+  bankInstructions?: T;
   changeLog?: T;
   updatedAt?: T;
   createdAt?: T;
