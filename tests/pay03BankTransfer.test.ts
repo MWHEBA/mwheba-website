@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
+import React from 'react';
+import { renderToString } from 'react-dom/server';
 import configPromise from '@/payload.config';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
@@ -11,6 +13,7 @@ import {
 } from '@/modules/payments/services/bankTransferService';
 import { POST as submitRoute } from '@/app/api/payments/bank-transfer/submit/route';
 import { POST as verifyRoute } from '@/app/api/payments/bank-transfer/verify/route';
+import { FinanceVerificationPanel } from '@/modules/payments/ui/FinanceVerificationPanel';
 
 describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
   let payload: any;
@@ -25,6 +28,8 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
   let superAdminUser: any;
   let superAdminToken: string;
   let physicalProduct: any;
+  let cust1Asset: any;
+  let cust2Asset: any;
 
   const cleanup = {
     users: [] as any[],
@@ -32,6 +37,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
     carts: [] as any[],
     products: [] as any[],
     transfers: [] as any[],
+    assets: [] as any[],
   };
 
   const unique = () => `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -155,6 +161,30 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
       },
     });
     cleanup.products.push(physicalProduct.id);
+
+    // 7. Create Uploaded Receipt Asset for Customer 1
+    cust1Asset = await payload.create({
+      collection: 'artwork-assets',
+      data: {
+        storageKey: `receipts/2026/cust1_receipt_${unique()}.pdf`,
+        originalFilename: 'cust1_cib_slip.pdf',
+        uploader: customerUser1.id,
+      },
+      context: { isTrustedUpload: true },
+    });
+    cleanup.assets.push(cust1Asset.id);
+
+    // 8. Create Uploaded Receipt Asset for Customer 2
+    cust2Asset = await payload.create({
+      collection: 'artwork-assets',
+      data: {
+        storageKey: `receipts/2026/cust2_receipt_${unique()}.pdf`,
+        originalFilename: 'cust2_cib_slip.pdf',
+        uploader: customerUser2.id,
+      },
+      context: { isTrustedUpload: true },
+    });
+    cleanup.assets.push(cust2Asset.id);
   });
 
   afterAll(async () => {
@@ -176,6 +206,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
       await del('orders', orderId);
     }
 
+    for (const aId of cleanup.assets) await del('artwork-assets', aId, { isTrustedUpload: true });
     for (const id of cleanup.users) await del('users', id);
     for (const id of cleanup.products) await del('products', id);
     for (const id of cleanup.carts) await del('carts', id);
@@ -253,6 +284,47 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
       ).rejects.toThrow('ORDER_OWNERSHIP_MISMATCH');
     });
 
+    it('rejects bank transfer submission referencing a non-existent receiptStorageKey (404 RECEIPT_KEY_NOT_FOUND)', async () => {
+      const order = await createTestBankTransferOrder(customerUser1);
+      await expect(
+        submitBankTransfer(payload, {
+          orderId: order.id,
+          claimedAmount: order.total,
+          bankReferenceCode: `WIRE_FAKE_${unique()}`,
+          receiptStorageKey: 'receipts/non_existent_fake_slip.pdf',
+          customer: { id: customerUser1.id, roles: customerUser1.roles },
+        })
+      ).rejects.toThrow('RECEIPT_KEY_NOT_FOUND');
+    });
+
+    it('rejects customer submitting another user\'s private receiptStorageKey (403 RECEIPT_OWNERSHIP_MISMATCH)', async () => {
+      const order2 = await createTestBankTransferOrder(customerUser2);
+      // Customer 2 tries to submit Customer 1's uploaded receipt
+      await expect(
+        submitBankTransfer(payload, {
+          orderId: order2.id,
+          claimedAmount: order2.total,
+          bankReferenceCode: `WIRE_STOLEN_${unique()}`,
+          receiptStorageKey: cust1Asset.storageKey,
+          customer: { id: customerUser2.id, roles: customerUser2.roles },
+        })
+      ).rejects.toThrow('RECEIPT_OWNERSHIP_MISMATCH');
+    });
+
+    it('rejects customer submitting another user\'s receiptFileId (403 RECEIPT_OWNERSHIP_MISMATCH)', async () => {
+      const order2 = await createTestBankTransferOrder(customerUser2);
+      // Customer 2 tries to submit Customer 1's asset ID
+      await expect(
+        submitBankTransfer(payload, {
+          orderId: order2.id,
+          claimedAmount: order2.total,
+          bankReferenceCode: `WIRE_STOLEN_ID_${unique()}`,
+          receiptFileId: cust1Asset.id,
+          customer: { id: customerUser2.id, roles: customerUser2.roles },
+        })
+      ).rejects.toThrow('RECEIPT_OWNERSHIP_MISMATCH');
+    });
+
     it('successfully submits bank transfer: creates record in pending_verification and updates order to pending_verification', async () => {
       const order = await createTestBankTransferOrder(customerUser1);
       const wireRef = `CIB_WIRE_${unique()}`;
@@ -261,7 +333,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
         orderId: order.id,
         claimedAmount: order.total,
         bankReferenceCode: wireRef,
-        receiptStorageKey: 'receipts/2026/cib_deposit_slip.pdf',
+        receiptStorageKey: cust1Asset.storageKey,
         customer: { id: customerUser1.id, roles: customerUser1.roles },
       });
 
@@ -274,7 +346,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
       expect(transferDoc.status).toBe('pending_verification');
       expect(transferDoc.claimedAmount).toBe(order.total);
       expect(transferDoc.bankReferenceCode).toBe(wireRef);
-      expect(transferDoc.receiptStorageKey).toBe('receipts/2026/cib_deposit_slip.pdf');
+      expect(transferDoc.receiptStorageKey).toBe(cust1Asset.storageKey);
 
       // Check order in DB
       const freshOrder = await payload.findByID({ collection: 'orders', id: order.id });
@@ -472,6 +544,124 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
         })
       ).rejects.toThrow('BANK_TRANSFER_DELETION_FORBIDDEN_AFTER_APPROVAL');
     });
+
+    it('rolls back bank transfer approval if order update fails, leaving transfer in pending_verification', async () => {
+      const order = await createTestBankTransferOrder(customerUser1);
+      const recCode = `STMT_ROLLBACK_${unique()}`;
+
+      const subRes = await submitBankTransfer(payload, {
+        orderId: order.id,
+        claimedAmount: order.total,
+        bankReferenceCode: `WIRE_ROLL_${unique()}`,
+        customer: { id: customerUser1.id, roles: customerUser1.roles },
+      });
+      cleanup.transfers.push(subRes.transferId);
+
+      // Verify with simulated order update failure
+      await expect(
+        verifyBankTransfer(payload, {
+          transferId: subRes.transferId,
+          action: 'approve',
+          internalReconciliationCode: recCode,
+          confirmedAmount: order.total,
+          actor: { id: financeUser.id, roles: financeUser.roles },
+          simulateOrderUpdateFailure: true,
+        })
+      ).rejects.toThrow('SIMULATED_ORDER_UPDATE_FAILURE');
+
+      // Verify PostgreSQL transaction rolled back: transfer doc must NOT be approved
+      const transferDoc = await payload.findByID({ collection: 'bank-transfers', id: subRes.transferId });
+      expect(transferDoc.status).toBe('pending_verification');
+      expect(transferDoc.internalReconciliationCode).toBeFalsy();
+
+      // Order must NOT be marked paid
+      const freshOrder = await payload.findByID({ collection: 'orders', id: order.id });
+      expect(freshOrder.paymentStatus).not.toBe('paid');
+    });
+
+    it('strictly forbids modifying the linked order on an existing bank transfer (BANK_TRANSFER_ORDER_IMMUTABLE)', async () => {
+      const order1 = await createTestBankTransferOrder(customerUser1);
+      const order2 = await createTestBankTransferOrder(customerUser1);
+
+      const subRes = await submitBankTransfer(payload, {
+        orderId: order1.id,
+        claimedAmount: order1.total,
+        bankReferenceCode: `WIRE_IMM_${unique()}`,
+        customer: { id: customerUser1.id, roles: customerUser1.roles },
+      });
+      cleanup.transfers.push(subRes.transferId);
+
+      // Attempt to reassign transfer to order2
+      await expect(
+        payload.update({
+          collection: 'bank-transfers',
+          id: subRes.transferId,
+          data: {
+            order: order2.id,
+          },
+          user: financeUser,
+          overrideAccess: true,
+        })
+      ).rejects.toThrow('BANK_TRANSFER_ORDER_IMMUTABLE');
+    });
+
+    it('rejects approving a bank transfer for an order that is already paid (ORDER_ALREADY_PAID)', async () => {
+      const order = await createTestBankTransferOrder(customerUser1);
+      const recCode1 = `STMT_PAID1_${unique()}`;
+
+      // Submit Transfer 1 while order is unpaid
+      const sub1 = await submitBankTransfer(payload, {
+        orderId: order.id,
+        claimedAmount: order.total,
+        bankReferenceCode: `WIRE_PAID1_${unique()}`,
+        customer: { id: customerUser1.id, roles: customerUser1.roles },
+      });
+      cleanup.transfers.push(sub1.transferId);
+
+      // Submit Transfer 2 while order is still pending_verification
+      const sub2 = await submitBankTransfer(payload, {
+        orderId: order.id,
+        claimedAmount: order.total,
+        bankReferenceCode: `WIRE_PAID2_${unique()}`,
+        customer: { id: customerUser1.id, roles: customerUser1.roles },
+      });
+      cleanup.transfers.push(sub2.transferId);
+
+      // Now approve Transfer 1 -> sets order to paid
+      await verifyBankTransfer(payload, {
+        transferId: sub1.transferId,
+        action: 'approve',
+        internalReconciliationCode: recCode1,
+        confirmedAmount: order.total,
+        actor: { id: financeUser.id, roles: financeUser.roles },
+      });
+
+      // Attempt to approve Transfer 2 on the now paid order -> MUST FAIL with ORDER_ALREADY_PAID
+      const recCode2 = `STMT_PAID2_${unique()}`;
+      await expect(
+        verifyBankTransfer(payload, {
+          transferId: sub2.transferId,
+          action: 'approve',
+          internalReconciliationCode: recCode2,
+          confirmedAmount: order.total,
+          actor: { id: financeUser.id, roles: financeUser.roles },
+        })
+      ).rejects.toThrow('ORDER_ALREADY_PAID');
+    });
+
+    it('returns bankDetails in checkout quote reflecting CommerceSettings status', async () => {
+      const cart = await getOrCreateCart(payload);
+      cleanup.carts.push(cart.id);
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: { items: [{ product: physicalProduct.id, quantity: 1 }] },
+      });
+
+      const quote = await buildCheckoutQuote(payload, cart.id, { method: 'pickup' });
+      expect(quote.bankDetails).toBeDefined();
+      expect(['pending_configuration', 'active']).toContain(quote.bankDetails?.status);
+    });
   });
 
   // ===========================================================================
@@ -619,6 +809,63 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
       expect(body.success).toBe(true);
       expect(body.status).toBe('APPROVED');
       expect(body.orderPaymentStatus).toBe('paid');
+    });
+  });
+
+  // ===========================================================================
+  // 6. UI & Finance Verification Panel Component Rendering
+  // ===========================================================================
+  describe('6. UI & Finance Verification Panel Component Rendering', () => {
+    it('renders FinanceVerificationPanel with pending bank transfer details, claimed amount, and reconciliation controls', () => {
+      const mockTransfers: any[] = [
+        {
+          id: 101,
+          orderId: 505,
+          orderNumber: 'ORD-2026-505',
+          orderTotal: 2500,
+          claimedAmount: 2500,
+          bankReferenceCode: 'CIB-TXN-998877',
+          receiptStorageKey: 'receipts/2026/deposit_slip_505.pdf',
+          status: 'pending_verification',
+        },
+      ];
+
+      const html = renderToString(
+        React.createElement(FinanceVerificationPanel, {
+          transfers: mockTransfers,
+          locale: 'ar',
+        })
+      );
+
+      expect(html).toContain('CIB-TXN-998877');
+      expect(html).toContain('505');
+      expect(html).toContain('receipts/2026/deposit_slip_505.pdf');
+      expect(html).toContain('كود مطابقة كشف الحساب البنكي الداخلي');
+    });
+
+    it('renders FinanceVerificationPanel in English locale', () => {
+      const mockTransfers: any[] = [
+        {
+          id: 102,
+          orderId: 506,
+          orderNumber: 'ORD-2026-506',
+          orderTotal: 1800,
+          claimedAmount: 1800,
+          bankReferenceCode: 'HSBC-WIRE-443322',
+          status: 'pending_verification',
+        },
+      ];
+
+      const html = renderToString(
+        React.createElement(FinanceVerificationPanel, {
+          transfers: mockTransfers,
+          locale: 'en',
+        })
+      );
+
+      expect(html).toContain('HSBC-WIRE-443322');
+      expect(html).toContain('Corporate Bank Wire Finance Verification');
+      expect(html).toContain('Approve &amp; Settle');
     });
   });
 });

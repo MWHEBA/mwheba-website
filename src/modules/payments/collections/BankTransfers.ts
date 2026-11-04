@@ -1,6 +1,7 @@
 import type { CollectionConfig } from 'payload';
 import { toIntegerPiastres } from '../../orders/logic/orderSnapshotEngine';
 import { hasRole } from '../../identity/access/roles';
+import { validateReceiptOwnership } from '../services/bankTransferService';
 
 // Global in-process mutex to serialize concurrent approvals with the same reconciliation code
 const reconciliationCodeMutexes = new Map<string, Promise<void>>();
@@ -197,6 +198,17 @@ export const BankTransfers: CollectionConfig = {
           if (data.claimedAmount !== undefined) {
             toIntegerPiastres(Number(data.claimedAmount), 'Claimed deposit amount');
           }
+
+          // 8. Strict receipt asset ownership validation
+          if (data.receiptFile || data.receiptStorageKey) {
+            await validateReceiptOwnership(
+              req.payload,
+              req.user,
+              data.receiptFile,
+              data.receiptStorageKey,
+              req
+            );
+          }
         }
 
         if (operation === 'update') {
@@ -204,6 +216,30 @@ export const BankTransfers: CollectionConfig = {
           if (originalDoc?.status === 'approved') {
             throw new Error(
               'BANK_TRANSFER_IMMUTABLE_AFTER_APPROVAL: Approved bank transfer records are immutable and cannot be updated, modified, or re-assigned.'
+            );
+          }
+
+          // Prevent modifying linked order on an existing transfer
+          const origOrderId =
+            typeof originalDoc?.order === 'object' && originalDoc?.order !== null
+              ? originalDoc.order.id
+              : originalDoc?.order;
+          const nextOrderId =
+            typeof data.order === 'object' && data.order !== null
+              ? data.order.id
+              : data.order;
+          if (nextOrderId && origOrderId && String(nextOrderId) !== String(origOrderId)) {
+            throw new Error('BANK_TRANSFER_ORDER_IMMUTABLE: Cannot reassign a bank transfer to a different order.');
+          }
+
+          // Validate receipt ownership if receipt is being modified
+          if (data.receiptFile || data.receiptStorageKey) {
+            await validateReceiptOwnership(
+              req.payload,
+              req.user,
+              data.receiptFile,
+              data.receiptStorageKey,
+              req
             );
           }
 
@@ -295,6 +331,18 @@ export const BankTransfers: CollectionConfig = {
                 throw new Error(`ORDER_NOT_FOUND: Linked order #${orderId} does not exist.`);
               }
 
+              if (linkedOrder.paymentStatus === 'paid') {
+                throw new Error(
+                  `ORDER_ALREADY_PAID: Cannot approve bank transfer for order #${orderId} because the order has already been settled and paid.`
+                );
+              }
+
+              if (linkedOrder.paymentMethod !== 'bank_transfer') {
+                throw new Error(
+                  `INVALID_ORDER_PAYMENT_METHOD: Cannot approve bank transfer for order #${orderId} with payment method '${linkedOrder.paymentMethod}'.`
+                );
+              }
+
               const expectedOrderTotal = Number(
                 linkedOrder.total || linkedOrder.amount || linkedOrder.financials?.grandTotal || 0
               );
@@ -326,6 +374,10 @@ export const BankTransfers: CollectionConfig = {
     afterChange: [
       async ({ req, doc, previousDoc }) => {
         if (doc.status === 'approved' && previousDoc?.status !== 'approved') {
+          if ((req as any)?.simulateOrderUpdateFailure) {
+            throw new Error('SIMULATED_ORDER_UPDATE_FAILURE: Order payment status update failed unexpectedly.');
+          }
+
           const orderId = typeof doc.order === 'object' && doc.order !== null ? doc.order.id : doc.order;
           if (orderId) {
             const existingOrder = await req.payload.findByID({
@@ -335,6 +387,11 @@ export const BankTransfers: CollectionConfig = {
             });
 
             if (existingOrder) {
+              if (existingOrder.paymentStatus === 'paid') {
+                throw new Error(
+                  `ORDER_ALREADY_PAID: Order #${orderId} has already been settled and paid.`
+                );
+              }
               const previousLogs = Array.isArray(existingOrder.auditLog) ? existingOrder.auditLog : [];
               const newEntry = {
                 entry: `Payment confirmed via manual Bank Transfer. Bank Ref: ${doc.bankReferenceCode}, Reconciliation Code: ${doc.internalReconciliationCode}, Verified by user #${req.user?.id} at ${new Date().toISOString()}`,

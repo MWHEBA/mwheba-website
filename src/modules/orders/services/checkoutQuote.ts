@@ -25,6 +25,17 @@ export interface CheckoutQuote {
   /** The tariff schedule is provisional until the owner approves D-015 in CommerceSettings. */
   isProvisional: boolean;
   tariffScheduleStatus: 'pending_owner_tariff_approval' | 'owner_approved';
+  /** Bank wire details from CommerceSettings for B2B bank transfer settlement (PAY-03) */
+  bankDetails?: {
+    status: 'pending_configuration' | 'active';
+    bankName?: string | null;
+    accountName?: string | null;
+    accountNumber?: string | null;
+    iban?: string | null;
+    swiftCode?: string | null;
+    instapayHandle?: string | null;
+    bankInstructions?: string | null;
+  };
 }
 
 /**
@@ -64,5 +75,15 @@ export async function buildCheckoutQuote(
     validationErrors: summary.validationErrors,
     isProvisional: tariff.isProvisional,
     tariffScheduleStatus: tariff.tariffScheduleStatus,
+    bankDetails: {
+      status: settings.bankDetailsStatus || 'pending_configuration',
+      bankName: settings.bankDetailsStatus === 'active' ? settings.bankName : null,
+      accountName: settings.bankDetailsStatus === 'active' ? settings.accountName : null,
+      accountNumber: settings.bankDetailsStatus === 'active' ? settings.accountNumber : null,
+      iban: settings.bankDetailsStatus === 'active' ? settings.iban : null,
+      swiftCode: settings.bankDetailsStatus === 'active' ? settings.swiftCode : null,
+      instapayHandle: settings.bankDetailsStatus === 'active' ? settings.instapayHandle : null,
+      bankInstructions: settings.bankDetailsStatus === 'active' ? settings.bankInstructions : null,
+    },
   };
 }

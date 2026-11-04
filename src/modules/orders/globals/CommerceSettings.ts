@@ -25,6 +25,14 @@ export interface CommerceSettingsData {
   smtpPort?: number | null;
   smtpUser?: string | null;
   fromEmail?: string | null;
+  bankDetailsStatus?: 'pending_configuration' | 'active';
+  bankName?: string | null;
+  accountName?: string | null;
+  accountNumber?: string | null;
+  iban?: string | null;
+  swiftCode?: string | null;
+  instapayHandle?: string | null;
+  bankInstructions?: string | null;
   changeLog?: Array<{
     changedBy: string;
     changedAt: string;

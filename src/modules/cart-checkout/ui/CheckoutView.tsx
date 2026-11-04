@@ -224,6 +224,82 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
           </div>
         </div>
 
+        {paymentMethod === 'bank_transfer' && (
+          <div
+            style={{
+              textAlign: isArabic ? 'right' : 'left',
+              padding: '1.25rem',
+              backgroundColor: 'var(--bg-secondary)',
+              border: '1px solid var(--border-default)',
+              borderRadius: 'var(--radius-sm)',
+              marginBottom: '2rem',
+              fontSize: '0.875rem',
+            }}
+          >
+            <div style={{ fontWeight: 700, color: 'var(--brand-primary-dark)', marginBottom: '0.5rem', fontSize: '0.9375rem' }}>
+              {isArabic ? 'تعليمات السداد والتحويل البنكي المؤسسي:' : 'Corporate Bank Wire & Payment Instructions:'}
+            </div>
+            {quote?.bankDetails?.status === 'active' ? (
+              <div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                  {quote.bankDetails.bankName && (
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>{isArabic ? 'اسم البنك' : 'Bank'}</span>
+                      <strong style={{ color: 'var(--text-primary)' }}>{quote.bankDetails.bankName}</strong>
+                    </div>
+                  )}
+                  {quote.bankDetails.accountName && (
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>{isArabic ? 'المستفيد' : 'Beneficiary'}</span>
+                      <strong style={{ color: 'var(--text-primary)' }}>{quote.bankDetails.accountName}</strong>
+                    </div>
+                  )}
+                  {quote.bankDetails.accountNumber && (
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>{isArabic ? 'رقم الحساب' : 'Account Number'}</span>
+                      <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.accountNumber}</strong>
+                    </div>
+                  )}
+                  {quote.bankDetails.iban && (
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>IBAN</span>
+                      <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.iban}</strong>
+                    </div>
+                  )}
+                  {quote.bankDetails.swiftCode && (
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>SWIFT</span>
+                      <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.swiftCode}</strong>
+                    </div>
+                  )}
+                  {quote.bankDetails.instapayHandle && (
+                    <div>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>Instapay</span>
+                      <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.instapayHandle}</strong>
+                    </div>
+                  )}
+                </div>
+                {quote.bankDetails.bankInstructions && (
+                  <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
+                    {quote.bankDetails.bankInstructions}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ color: 'var(--text-secondary)', lineHeight: '1.6' }}>
+                {isArabic
+                  ? 'تم تسجيل طلبكم بنجاح. سيتم تزويدكم ببيانات التحويل البنكي والتنسيق المالي مع الفاتورة المعتمدة بعد مراجعة الإدارة المالية لضمان سلامة الإجراءات قبل الإطلاق الرسمي.'
+                  : 'Your order has been registered. Official bank wire coordinates and financial invoice coordination will be provided directly following finance department review.'}
+              </div>
+            )}
+            <div style={{ marginTop: '0.75rem', fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
+              {isArabic
+                ? 'بعد إتمام التحويل، يرجى تقديم إشعار الإيداع البنكي ورقم المرجع عبر مسار مراجعة المدفوعات لاعتماد الإنتاج والتسليم.'
+                : 'After completing the transfer, please submit the deposit slip and reference code via the payment review portal for production and dispatch clearance.'}
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
           <Link
             href={isArabic ? '/ar/store' : '/en/store'}
@@ -589,6 +665,81 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                     </div>
                   </div>
                 </label>
+
+                {paymentMethod === 'bank_transfer' && (
+                  <div
+                    style={{
+                      padding: '1rem',
+                      backgroundColor: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-default)',
+                      borderRadius: 'var(--radius-sm)',
+                      fontSize: '0.8125rem',
+                      marginBottom: '0.25rem',
+                    }}
+                  >
+                    {quote?.bankDetails?.status === 'active' ? (
+                      <div>
+                        <div style={{ fontWeight: 700, color: 'var(--brand-primary-dark)', marginBottom: '0.5rem' }}>
+                          {isArabic ? 'بيانات الحساب البنكي المعتمد للتحويل (D-007):' : 'Official Corporate Bank Coordinates (D-007):'}
+                        </div>
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                          {quote.bankDetails.bankName && (
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>{isArabic ? 'البنك' : 'Bank'}</span>
+                              <strong style={{ color: 'var(--text-primary)' }}>{quote.bankDetails.bankName}</strong>
+                            </div>
+                          )}
+                          {quote.bankDetails.accountName && (
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>{isArabic ? 'المستفيد' : 'Beneficiary'}</span>
+                              <strong style={{ color: 'var(--text-primary)' }}>{quote.bankDetails.accountName}</strong>
+                            </div>
+                          )}
+                          {quote.bankDetails.accountNumber && (
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>{isArabic ? 'رقم الحساب' : 'Account No.'}</span>
+                              <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.accountNumber}</strong>
+                            </div>
+                          )}
+                          {quote.bankDetails.iban && (
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>IBAN</span>
+                              <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.iban}</strong>
+                            </div>
+                          )}
+                          {quote.bankDetails.swiftCode && (
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>SWIFT</span>
+                              <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.swiftCode}</strong>
+                            </div>
+                          )}
+                          {quote.bankDetails.instapayHandle && (
+                            <div>
+                              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', display: 'block' }}>Instapay</span>
+                              <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{quote.bankDetails.instapayHandle}</strong>
+                            </div>
+                          )}
+                        </div>
+                        {quote.bankDetails.bankInstructions && (
+                          <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-secondary)', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
+                            {quote.bankDetails.bankInstructions}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--text-secondary)', lineHeight: '1.5' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--brand-primary-dark)', marginBottom: '0.25rem' }}>
+                          {isArabic ? 'تنسيق التحويل البنكي المؤسسي:' : 'Corporate Bank Wire Coordination:'}
+                        </div>
+                        <div>
+                          {isArabic
+                            ? 'بيانات التحويل البنكي والتنسيق المالي يتم تزويدكم بها مع الفاتورة بعد مراجعة الطلب لضمان دقة المعاملات قبل الإطلاق الرسمي.'
+                            : 'Bank wire coordinates and financial coordination are provided with your invoice upon order review to ensure accuracy prior to official launch.'}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* 2. Cash on Delivery (D-007 / D-021 Confirmed) */}
                 <label
