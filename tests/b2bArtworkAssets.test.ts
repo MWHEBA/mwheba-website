@@ -17,6 +17,7 @@ import {
   createArtworkDownloadToken,
   verifyArtworkDownloadToken,
   resolveArtworkPath,
+  getSigningSecret,
 } from '@/modules/customization/lib/privateStorage';
 import { privateUploadDir } from '@/modules/customization/collections/Media';
 import { POST as uploadArtworkRoute } from '@/app/api/customization/upload-artwork/route';
@@ -31,11 +32,15 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
   let adminUser: any;
   let customerUser: any;
   let testProduct: any;
+  let testAsset: any;
   const createdAssetIds: (string | number)[] = [];
   const createdCartIds: (string | number)[] = [];
   const testFilesToClean: string[] = [];
 
   beforeAll(async () => {
+    process.env.MEDIA_SIGNING_SECRET = process.env.MEDIA_SIGNING_SECRET || 'mwheba-media-signing-secret-dev-2026-32chars';
+    process.env.PAYLOAD_SECRET = process.env.PAYLOAD_SECRET || 'mwheba-dev-foundation-secret-key-32chars-min';
+
     payload = await getPayload({ config: configPromise });
 
     // 1. Initialize two separate test guest carts
@@ -606,6 +611,145 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       const res = await uploadArtworkRoute(req);
       expect([413, 422]).toContain(res.status);
     });
+
+    it('handles concurrent quantity mutation during artwork upload and preserves updated quantity without overwrite', async () => {
+      const concCart = await getOrCreateCart(payload);
+      createdCartIds.push(concCart.id);
+      const signedCookie = signCartId(concCart.id);
+
+      // Add item to cart: 10 units
+      const addRes = await cartItemsPostRoute(
+        new NextRequest('http://localhost:3000/api/cart/items', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+          },
+          body: JSON.stringify({
+            productId: testProduct.id,
+            quantity: 10,
+            operationKey: `op_conc_setup_${Date.now()}`,
+          }),
+        })
+      );
+      const addData = await addRes.json();
+      const lineItemId = addData.summary.items[0].id;
+
+      // Prepare artwork upload
+      const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="5" r="5" fill="blue"/></svg>';
+      const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
+      const formData = new FormData();
+      formData.append('file', blob, 'concurrent_logo.svg');
+      formData.append('lineItemId', lineItemId);
+
+      const uploadReq = new NextRequest('http://localhost:3000/api/customization/upload-artwork', {
+        method: 'POST',
+        headers: {
+          Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+        },
+        body: formData,
+      });
+
+      // Prepare concurrent quantity mutation updating quantity from 10 to 25
+      const mutateReq = new NextRequest('http://localhost:3000/api/cart/items', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+        },
+        body: JSON.stringify({
+          productId: testProduct.id,
+          quantity: 15, // adds 15 -> total 25
+          operationKey: `op_conc_mutation_${Date.now()}`,
+        }),
+      });
+
+      // Execute both concurrently
+      const [uploadRes, mutateRes] = await Promise.all([
+        uploadArtworkRoute(uploadReq),
+        cartItemsPostRoute(mutateReq),
+      ]);
+
+      expect(uploadRes.status).toBe(201);
+      expect(mutateRes.status).toBe(200);
+
+      const uploadData = await uploadRes.json();
+      expect(uploadData.success).toBe(true);
+      createdAssetIds.push(uploadData.assetId);
+
+      // Inspect PostgreSQL state: quantity must be 25, artworkAssetId must be set
+      const dbCart = await payload.findByID({
+        collection: 'carts',
+        id: concCart.id,
+        depth: 0,
+      });
+
+      expect(dbCart.items.length).toBe(1);
+      expect(dbCart.items[0].quantity).toBe(25);
+      expect(dbCart.items[0].artworkAssetId).toBe(String(uploadData.assetId));
+    });
+
+    it('handles concurrent line item deletion during artwork upload and cleanly rolls back file and asset', async () => {
+      const delCart = await getOrCreateCart(payload);
+      createdCartIds.push(delCart.id);
+      const signedCookie = signCartId(delCart.id);
+
+      // Add item to cart
+      const addRes = await cartItemsPostRoute(
+        new NextRequest('http://localhost:3000/api/cart/items', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+          },
+          body: JSON.stringify({
+            productId: testProduct.id,
+            quantity: 10,
+            operationKey: `op_del_setup_${Date.now()}`,
+          }),
+        })
+      );
+      const addData = await addRes.json();
+      const lineItemId = addData.summary.items[0].id;
+
+      // Delete the item concurrently before upload locks the cart
+      await payload.update({
+        collection: 'carts',
+        id: delCart.id,
+        data: {
+          items: [],
+        },
+        depth: 0,
+      });
+
+      // Try uploading for the now-deleted item
+      const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="20" height="20"/></svg>';
+      const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
+      const formData = new FormData();
+      const filename = `concurrent_del_${Date.now()}.svg`;
+      formData.append('file', blob, filename);
+      formData.append('lineItemId', lineItemId);
+
+      const uploadReq = new NextRequest('http://localhost:3000/api/customization/upload-artwork', {
+        method: 'POST',
+        headers: {
+          Cookie: `${CART_COOKIE_NAME}=${signedCookie}`,
+        },
+        body: formData,
+      });
+
+      const res = await uploadArtworkRoute(uploadReq);
+      expect(res.status).toBe(422);
+      const data = await res.json();
+      expect(data.error).toBe('LINE_ITEM_NOT_FOUND');
+
+      // Verify no orphan doc in database
+      const orphanAssets = await payload.find({
+        collection: 'artwork-assets',
+        where: { originalFilename: { equals: filename } },
+      });
+      expect(orphanAssets.totalDocs).toBe(0);
+    });
   });
 
   // =========================================================================
@@ -730,7 +874,6 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
   // 6. Temporary Signed URLs & Private File Download Streaming
   // =========================================================================
   describe('6. Temporary Signed URLs & Private File Streaming', () => {
-    let testAsset: any;
     let testAssetFileOnDisk: string;
     const testFileBytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect fill="gold" width="20" height="20"/></svg>');
 
@@ -876,6 +1019,65 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       } finally {
         payload.auth = originalAuth;
       }
+    });
+  });
+
+  // =========================================================================
+  // 7. Signing Secret Key Enforcement & Production Security Guards
+  // =========================================================================
+  describe('7. Secret Key Enforcement & Configuration Guards', () => {
+    const originalMediaSecret = process.env.MEDIA_SIGNING_SECRET;
+    const originalPayloadSecret = process.env.PAYLOAD_SECRET;
+
+    afterAll(() => {
+      process.env.MEDIA_SIGNING_SECRET = originalMediaSecret;
+      process.env.PAYLOAD_SECRET = originalPayloadSecret;
+    });
+
+    it('strictly throws SECURITY_CONFIGURATION_ERROR when signing secret is unconfigured or under 32 chars', () => {
+      delete process.env.MEDIA_SIGNING_SECRET;
+      delete process.env.PAYLOAD_SECRET;
+
+      expect(() => getSigningSecret()).toThrow(/SECURITY_CONFIGURATION_ERROR/);
+      expect(() => createArtworkDownloadToken(999)).toThrow(/SECURITY_CONFIGURATION_ERROR/);
+
+      // Short / weak secret
+      process.env.MEDIA_SIGNING_SECRET = 'short-secret';
+      expect(() => getSigningSecret()).toThrow(/(minimum|at least) 32 characters/);
+    });
+
+    it('fails closed in verifyArtworkDownloadToken when signing secret is missing', () => {
+      delete process.env.MEDIA_SIGNING_SECRET;
+      delete process.env.PAYLOAD_SECRET;
+
+      const fakeToken = 'eyJpZCI6Ijk5OSIsImV4cCI6OTk5OTk5OTk5OX0.fake_signature';
+      expect(verifyArtworkDownloadToken(fakeToken, 999)).toBe(false);
+    });
+
+    it('fails safely with HTTP 500 on /sign and HTTP 403 on /download when secret is unconfigured', async () => {
+      delete process.env.MEDIA_SIGNING_SECRET;
+      delete process.env.PAYLOAD_SECRET;
+
+      // /sign route with valid cookie
+      const signedCookieA = signCartId(testCartA.id);
+      const signReq = new NextRequest(`http://localhost:3000/api/customization/artwork/${testAsset.id}/sign`, {
+        method: 'POST',
+        headers: {
+          Cookie: `${CART_COOKIE_NAME}=${signedCookieA}`,
+        },
+      });
+      const signRes = await signArtworkRoute(signReq, { params: Promise.resolve({ id: String(testAsset.id) }) });
+      expect(signRes.status).toBe(500);
+      const signData = await signRes.json();
+      expect(signData.error).toBe('INTERNAL_ERROR');
+      expect(signData.message).toContain('SECURITY_CONFIGURATION_ERROR');
+
+      // /download route with any token fails closed with 403
+      const dlReq = new NextRequest(`http://localhost:3000/api/customization/artwork/${testAsset.id}/download?token=dummy.token`, {
+        method: 'GET',
+      });
+      const dlRes = await downloadArtworkRoute(dlReq, { params: Promise.resolve({ id: String(testAsset.id) }) });
+      expect(dlRes.status).toBe(403);
     });
   });
 });

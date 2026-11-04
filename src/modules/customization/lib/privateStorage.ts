@@ -6,12 +6,19 @@ import { privateUploadDir } from '../collections/Media';
 
 const DEFAULT_TTL_SECONDS = 900; // 15 minutes per Ticket B2B-03
 
-function getSigningSecret(): string {
-  const key =
-    process.env.MEDIA_SIGNING_SECRET ||
-    process.env.PAYLOAD_SECRET ||
-    'mwheba-dev-foundation-secret-key-32chars-min';
-  return key;
+/**
+ * Resolves the cryptographic signing secret for temporary download tokens.
+ * Strictly enforces presence of MEDIA_SIGNING_SECRET or PAYLOAD_SECRET with >= 32 characters.
+ * Rejects hardcoded fallback defaults in production or when keys are unconfigured.
+ */
+export function getSigningSecret(): string {
+  const secret = process.env.MEDIA_SIGNING_SECRET || process.env.PAYLOAD_SECRET;
+  if (!secret || typeof secret !== 'string' || secret.trim().length < 32) {
+    throw new Error(
+      'SECURITY_CONFIGURATION_ERROR: Valid MEDIA_SIGNING_SECRET or PAYLOAD_SECRET (minimum 32 characters) must be configured in environment to sign and verify artwork downloads.'
+    );
+  }
+  return secret.trim();
 }
 
 /**
@@ -44,7 +51,15 @@ export function verifyArtworkDownloadToken(
   const [payload, signature, extra] = token.split('.');
   if (!payload || !signature || extra) return false;
 
-  const expected = createHmac('sha256', getSigningSecret()).update(payload).digest();
+  let secret: string;
+  try {
+    secret = getSigningSecret();
+  } catch {
+    // Fail closed: Refuse to verify or accept any token if signing configuration is missing or invalid
+    return false;
+  }
+
+  const expected = createHmac('sha256', secret).update(payload).digest();
   let supplied: Buffer;
   try {
     supplied = Buffer.from(signature, 'base64url');

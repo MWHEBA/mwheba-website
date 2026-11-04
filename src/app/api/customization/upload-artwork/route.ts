@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
-import { CART_COOKIE_NAME } from '@/modules/cart-checkout/services/cartStorage';
+import { CART_COOKIE_NAME, withCartLock } from '@/modules/cart-checkout/services/cartStorage';
 import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { validateArtworkFile } from '@/modules/customization/lib/fileValidation';
 import { saveArtworkFile, cleanupUploadedArtwork } from '@/modules/customization/lib/privateStorage';
@@ -15,7 +15,7 @@ import { saveArtworkFile, cleanupUploadedArtwork } from '@/modules/customization
  * 3. Strict file size (max 50MB) and magic bytes content inspection
  * 4. Storage in persistent private filesystem outside public web root
  * 5. Record creation in ArtworkAssets collection via trusted context with scanStatus = 'unscanned'
- * 6. Atomic binding to cart item with guaranteed rollback on failure
+ * 6. Atomic binding to cart line item under withCartLock PostgreSQL advisory lock with safe rollback
  */
 export async function POST(req: NextRequest) {
   try {
@@ -144,7 +144,6 @@ export async function POST(req: NextRequest) {
     const { storageKey } = await saveArtworkFile(buffer, validation.originalFilename);
 
     // 6. Create ArtworkAssets Collection Record via trusted context
-    // Note: scanStatus is explicitly 'unscanned' because format/magic-byte validation is NOT an antivirus clearance.
     let asset: any;
     try {
       asset = await payload.create({
@@ -171,44 +170,92 @@ export async function POST(req: NextRequest) {
       throw createErr;
     }
 
-    // 7. Atomic Binding to Cart Line Item (if requested)
-    if (targetCart && lineItemId) {
-      const updatedItems = (targetCart.items || []).map((item: any) => {
-        if (item.id === lineItemId) {
-          return {
-            ...item,
-            artworkAssetId: String(asset.id),
-          };
-        }
-        return item;
-      });
+    // 7. Atomic Binding to Cart Line Item under withCartLock (re-reading fresh cart state)
+    if (lineItemId && sessionCartId) {
+      let cartUpdated = false;
 
       try {
-        await payload.update({
-          collection: 'carts',
-          id: targetCart.id,
-          data: {
-            items: updatedItems,
-          },
-          depth: 0,
+        await withCartLock(payload, sessionCartId, async (lockCtx) => {
+          // Re-fetch fresh cart under PostgreSQL advisory lock to ensure latest items & concurrent mutations
+          const freshCart = await payload.findByID({
+            collection: 'carts',
+            id: sessionCartId,
+            depth: 0,
+          });
+
+          if (!freshCart) {
+            const err: any = new Error('Cart session was not found.');
+            err.code = 'CART_NOT_FOUND';
+            throw err;
+          }
+
+          const currentItems = Array.isArray(freshCart.items) ? freshCart.items : [];
+          const targetIndex = currentItems.findIndex((item: any) => item.id === lineItemId);
+
+          if (targetIndex === -1) {
+            const err: any = new Error(`Line item '${lineItemId}' was concurrently removed or does not exist.`);
+            err.code = 'LINE_ITEM_REMOVED_CONCURRENTLY';
+            throw err;
+          }
+
+          // Preserve all concurrent mutations (e.g. updated quantity, removed other items)
+          // and update strictly the target line item's artworkAssetId
+          const updatedItems = currentItems.map((item: any) => {
+            if (item.id === lineItemId) {
+              return {
+                ...item,
+                artworkAssetId: String(asset.id),
+              };
+            }
+            return item;
+          });
+
+          await payload.update({
+            collection: 'carts',
+            id: sessionCartId,
+            data: {
+              items: updatedItems,
+            },
+            depth: 0,
+          });
+
+          lockCtx.markSaved();
+          cartUpdated = true;
         });
       } catch (bindErr: any) {
-        // ROLLBACK: Delete written file and created database record if cart update fails
-        await cleanupUploadedArtwork(storageKey);
-        await payload.delete({
-          collection: 'artwork-assets',
-          id: asset.id,
-          context: { isTrustedUpload: true },
-          overrideAccess: true,
-        });
+        // ROLLBACK SAFETY:
+        // Only delete file and asset if the database cart update did NOT succeed (cartUpdated === false).
+        // If the database update succeeded in PostgreSQL, NEVER delete the file,
+        // because the cart already references it and doing so would create a broken dangling reference.
+        if (!cartUpdated) {
+          await cleanupUploadedArtwork(storageKey);
+          await payload.delete({
+            collection: 'artwork-assets',
+            id: asset.id,
+            context: { isTrustedUpload: true },
+            overrideAccess: true,
+          });
 
-        return NextResponse.json(
-          {
-            error: 'CART_BINDING_FAILED',
-            message: `Failed to bind artwork to cart line item: ${bindErr?.message || 'Database update error'}`,
-          },
-          { status: 500 }
-        );
+          if (bindErr.code === 'LINE_ITEM_REMOVED_CONCURRENTLY') {
+            return NextResponse.json(
+              {
+                error: 'LINE_ITEM_NOT_FOUND',
+                message: bindErr.message,
+              },
+              { status: 422 }
+            );
+          }
+
+          return NextResponse.json(
+            {
+              error: 'CART_BINDING_FAILED',
+              message: `Failed to bind artwork to cart line item: ${bindErr?.message || 'Database update error'}`,
+            },
+            { status: 500 }
+          );
+        } else {
+          console.warn('Cart update was saved, but post-lock error occurred:', bindErr?.message);
+        }
       }
     }
 
