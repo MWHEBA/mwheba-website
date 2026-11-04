@@ -2,13 +2,32 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { edgeRedirectEngine } from './modules/redirects/edgeRedirectEngine';
 
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'SAMEORIGIN',
+  'X-XSS-Protection': '1; mode=block',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
+  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
+};
+
+function applySecurityHeaders(response: NextResponse): NextResponse {
+  for (const [key, value] of Object.entries(SECURITY_HEADERS)) {
+    if (!response.headers.has(key)) {
+      response.headers.set(key, value);
+    }
+  }
+  return response;
+}
+
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   const evaluation = edgeRedirectEngine.evaluate(pathname, search);
 
   if (evaluation.action === 'GONE_410') {
-    return new NextResponse('410 Gone: This legacy resource has been permanently decommissioned.', {
+    const response = new NextResponse('410 Gone: This legacy resource has been permanently decommissioned.', {
       status: 410,
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
@@ -16,13 +35,14 @@ export function middleware(request: NextRequest) {
         'Cache-Control': 'public, max-age=86400',
       },
     });
+    return applySecurityHeaders(response);
   }
 
   if (evaluation.action === 'REDIRECT_301' && evaluation.destination) {
     const redirectUrl = new URL(evaluation.destination, request.url);
     const response = NextResponse.redirect(redirectUrl, 301);
     response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
-    return response;
+    return applySecurityHeaders(response);
   }
 
   if (evaluation.action === 'REQUIRES_REVIEW' && evaluation.destination) {
@@ -31,10 +51,11 @@ export function middleware(request: NextRequest) {
     // Strict SEO rule: never permanently cache unreviewed/provisional redirects
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     response.headers.set('X-Redirect-Status', 'pending_owner_review');
-    return response;
+    return applySecurityHeaders(response);
   }
 
-  return NextResponse.next();
+  const response = NextResponse.next();
+  return applySecurityHeaders(response);
 }
 
 export const config = {
