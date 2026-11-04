@@ -907,6 +907,22 @@ export interface Order {
    */
   totalCustomizationFees?: number | null;
   /**
+   * Statutory VAT / sales tax (default 0 until formally reviewed with agency tax counsel per PAY-05).
+   */
+  taxAmount?: number | null;
+  /**
+   * Legal tax boundary review status (PAY-05).
+   */
+  taxReviewStatus?: ('pending_accountant_review' | 'tax_exempt' | 'tax_applied') | null;
+  /**
+   * Integer piastres (100 piastres = 1 EGP) for gateway and audit ledger precision.
+   */
+  grandTotalPiastres?: number | null;
+  /**
+   * Reconciled bank statement transaction code or courier remittance reference.
+   */
+  reconciliationReference?: string | null;
+  /**
    * Server-recorded append-only audit trail of financial and fulfillment status changes.
    */
   auditLog?:
@@ -2136,6 +2152,10 @@ export interface OrdersSelect<T extends boolean = true> {
   paidAt?: T;
   subtotal?: T;
   totalCustomizationFees?: T;
+  taxAmount?: T;
+  taxReviewStatus?: T;
+  grandTotalPiastres?: T;
+  reconciliationReference?: T;
   auditLog?:
     | T
     | {

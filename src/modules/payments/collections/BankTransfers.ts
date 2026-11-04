@@ -411,6 +411,7 @@ export const BankTransfers: CollectionConfig = {
                 data: {
                   paymentStatus: 'paid',
                   paidAt: existingOrder.paidAt || new Date().toISOString(),
+                  reconciliationReference: doc.internalReconciliationCode,
                   auditLog: [...previousLogs, newEntry],
                 },
                 req,

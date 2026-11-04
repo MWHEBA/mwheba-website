@@ -418,6 +418,7 @@ export async function recordCodCollection(
         paymentStatus: 'paid',
         paidAt: new Date().toISOString(),
         remittanceStatus: newRemittanceStatus,
+        reconciliationReference: receiptReference,
         codDetails: {
           requiredAmount: expectedTotal,
           collectedAmount,

@@ -513,6 +513,8 @@ export async function createOrderFromCart(
           shippingAddress: shippingAddress as any,
           items: orderItems as any,
           shippingFee,
+          taxAmount: 0,
+          taxReviewStatus: 'pending_accountant_review',
           paymentMethod,
           orderStatus: paymentMethod === 'cod' ? 'confirmed' : 'pending',
           paymentStatus: 'unpaid',

@@ -464,6 +464,43 @@ export default buildConfig({
                 },
               },
               {
+                name: 'taxAmount',
+                type: 'number',
+                defaultValue: 0,
+                admin: {
+                  description: 'Statutory VAT / sales tax (default 0 until formally reviewed with agency tax counsel per PAY-05).',
+                },
+              },
+              {
+                name: 'taxReviewStatus',
+                type: 'select',
+                defaultValue: 'pending_accountant_review',
+                options: [
+                  { label: 'Pending Accountant Legal & Tax Review', value: 'pending_accountant_review' },
+                  { label: 'Tax Exempt', value: 'tax_exempt' },
+                  { label: 'Tax Applied', value: 'tax_applied' },
+                ],
+                admin: {
+                  position: 'sidebar',
+                  description: 'Legal tax boundary review status (PAY-05).',
+                },
+              },
+              {
+                name: 'grandTotalPiastres',
+                type: 'number',
+                admin: {
+                  readOnly: true,
+                  description: 'Integer piastres (100 piastres = 1 EGP) for gateway and audit ledger precision.',
+                },
+              },
+              {
+                name: 'reconciliationReference',
+                type: 'text',
+                admin: {
+                  description: 'Reconciled bank statement transaction code or courier remittance reference.',
+                },
+              },
+              {
                 name: 'auditLog',
                 type: 'array',
                 fields: [
@@ -718,6 +755,28 @@ export default buildConfig({
                     if (data.totalCustomizationFees !== undefined) {
                       data.totalCustomizationFees = originalDoc.totalCustomizationFees;
                     }
+                    if (data.shippingFee !== undefined) {
+                      data.shippingFee = originalDoc.shippingFee;
+                    }
+                    if (data.taxAmount !== undefined) {
+                      data.taxAmount = originalDoc.taxAmount;
+                    }
+                    if (data.taxReviewStatus === undefined && originalDoc.taxReviewStatus) {
+                      data.taxReviewStatus = originalDoc.taxReviewStatus;
+                    }
+                    if (data.grandTotalPiastres === undefined && originalDoc.grandTotalPiastres) {
+                      data.grandTotalPiastres = originalDoc.grandTotalPiastres;
+                    }
+
+                    // Enforce mathematical financial consistency on updates
+                    const curSub = Number(data.subtotal ?? originalDoc.subtotal ?? 0);
+                    const curFees = Number(data.totalCustomizationFees ?? originalDoc.totalCustomizationFees ?? 0);
+                    const curShip = Number(data.shippingFee ?? originalDoc.shippingFee ?? 0);
+                    const curTax = Number(data.taxAmount ?? originalDoc.taxAmount ?? 0);
+                    const curComputedTotal = curSub + curFees + curShip + curTax;
+                    const curExpectedPiastres = toIntegerPiastres(curComputedTotal, 'Order ledger total');
+
+                    data.grandTotalPiastres = curExpectedPiastres;
                     return data;
                   }
 
@@ -894,12 +953,16 @@ export default buildConfig({
                   }
 
                   const shippingFee = Number(data.shippingFee || data.fulfillment?.shippingFee || 0);
-                  const grandTotal = calculatedAmount + shippingFee;
+                  const taxAmount = Number(data.taxAmount || 0);
+                  const grandTotal = calculatedAmount + shippingFee + taxAmount;
                   data.subtotal = calculatedSubtotal;
                   data.totalCustomizationFees = calculatedCustomizationTotal;
                   data.shippingFee = shippingFee;
+                  data.taxAmount = taxAmount;
+                  data.taxReviewStatus = data.taxReviewStatus || 'pending_accountant_review';
                   data.amount = grandTotal;
                   data.total = grandTotal;
+                  data.grandTotalPiastres = toIntegerPiastres(grandTotal, 'Order grand total');
 
                   if (data.deliveryMethod === 'pickup') {
                     if (!data.fulfillmentNotes || !data.fulfillmentNotes.includes('Office Pickup')) {
