@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
 import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
-import { CART_COOKIE_NAME, getCartSummary } from '@/modules/cart-checkout/services/cartStorage';
-import { resolveDeliveryTariff } from '@/modules/orders/services/deliveryTariff';
+import { CART_COOKIE_NAME } from '@/modules/cart-checkout/services/cartStorage';
+import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 
 /**
  * POST /api/checkout/quote
@@ -39,19 +39,9 @@ export async function POST(req: NextRequest) {
 
     const governorate =
       typeof body?.delivery?.governorate === 'string' ? body.delivery.governorate : undefined;
-    const tariff = resolveDeliveryTariff({ method, governorate });
-    const summary = await getCartSummary(payload, sessionCartId, tariff.amount);
+    const quote = await buildCheckoutQuote(payload, sessionCartId, { method, governorate });
 
-    return NextResponse.json({
-      success: true,
-      shippingFee: tariff.amount,
-      currency: tariff.currency,
-      isProvisional: tariff.isProvisional,
-      tariffScheduleStatus: tariff.tariffScheduleStatus,
-      subtotal: summary.subtotal,
-      totalCustomizationFees: summary.totalCustomizationFees,
-      grandTotal: summary.grandTotal,
-    });
+    return NextResponse.json({ success: true, ...quote });
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message || 'QUOTE_FAILED' }, { status: 500 });
   }

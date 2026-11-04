@@ -42,6 +42,8 @@ export interface CreateOrderFromCartInput {
   customer: CreateOrderCustomerInput;
   delivery: CreateOrderDeliveryInput;
   paymentMethod: 'cod' | 'bank_transfer';
+  /** Grand total the customer saw (from the server quote). Rejected with 409 if the server total differs. */
+  expectedGrandTotal?: number;
 }
 
 export interface CreateOrderResult {
@@ -444,6 +446,17 @@ export async function createOrderFromCart(
       }
 
       const shippingFee = tariffQuote.amount;
+
+      // Server-authoritative total vs. the total the customer saw. Any drift (product price,
+      // customization fee, tariff) is rejected with 409 BEFORE the order is created.
+      if (typeof input.expectedGrandTotal === 'number') {
+        const serverGrandTotal = orderItems.reduce((sum: number, line: any) => sum + line.lineTotal, 0) + shippingFee;
+        if (input.expectedGrandTotal !== serverGrandTotal) {
+          const err = new Error(`PRICE_QUOTE_MISMATCH: Displayed total (${input.expectedGrandTotal}) differs from the current server total (${serverGrandTotal}). Please review the updated quote.`);
+          (err as any).statusCode = 409;
+          throw err;
+        }
+      }
       const fulfillmentNotes = delivery.method === 'pickup'
         ? (delivery.fulfillmentNotes
             ? `${delivery.fulfillmentNotes} • ${tariffQuote.fulfillmentNoteEn}`

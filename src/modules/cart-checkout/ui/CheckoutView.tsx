@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useCart } from '../context/CartContext';
-import { sampleProducts } from '@/modules/catalog/data/sampleProducts';
 import { Badge, Button } from '@/shared/ui/primitives';
+import type { CheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 
 interface CheckoutViewProps {
   locale: string;
@@ -12,7 +12,8 @@ interface CheckoutViewProps {
 
 export function CheckoutView({ locale }: CheckoutViewProps) {
   const isArabic = locale === 'ar';
-  const { items, calculation, shippingFee, setShippingFee, resetSession } = useCart();
+  const { items, shippingFee, setShippingFee, resetSession } = useCart();
+  const [quote, setQuote] = useState<CheckoutQuote | null>(null);
   const [quoteReady, setQuoteReady] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
@@ -62,6 +63,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
         const data = await res.json();
         if (cancelled) return;
         if (!res.ok || !data.success) throw new Error(data.error || 'Quote unavailable');
+        setQuote(data);
         setShippingFee(data.shippingFee);
         setQuoteReady(true);
       } catch (err: any) {
@@ -77,7 +79,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!calculation.canCheckout || !quoteReady) return;
+    if (!quote || !quote.canCheckout || !quoteReady) return;
 
     setIsSubmitting(true);
     setOrderError(null);
@@ -104,14 +106,26 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
               buildingDetails,
             } : undefined,
             fulfillmentNotes,
-            expectedShippingFee: shippingFee,
+            expectedShippingFee: quote.shippingFee,
           },
           paymentMethod: paymentMethod,
+          expectedGrandTotal: quote.grandTotal,
         }),
       });
 
       const data = await res.json();
       if (!res.ok || !data.success) {
+        if (res.status === 409 && data.updatedQuote) {
+          // Price or tariff changed between display and confirmation: show the refreshed quote and ask to re-confirm.
+          setQuote(data.updatedQuote);
+          setShippingFee(data.updatedQuote.shippingFee);
+          setOrderError(
+            isArabic
+              ? `تغيّر السعر أو رسوم الشحن. الإجمالي المحدّث ${Number(data.updatedQuote.grandTotal).toLocaleString()} ج.م. راجع الملخص ثم أكّد الطلب مجددًا.`
+              : `Pricing or delivery fee changed. Updated total: ${Number(data.updatedQuote.grandTotal).toLocaleString()} EGP. Please review and confirm again.`
+          );
+          return;
+        }
         throw new Error(data.error || 'Failed to place order');
       }
 
@@ -241,7 +255,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
       </header>
 
       {/* If cart empty or MOQ not satisfied */}
-      {!calculation.canCheckout && (
+      {(items.length === 0 || (quote && !quote.canCheckout)) && (
         <div
           style={{
             padding: '1.25rem 1.5rem',
@@ -408,6 +422,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                   <input
                     type="radio"
                     name="delivery"
+                    value="shipping"
                     checked={deliveryMethod === 'shipping'}
                     onChange={() => handleDeliveryChange('shipping')}
                     style={{ marginTop: '0.25rem' }}
@@ -444,6 +459,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                   <input
                     type="radio"
                     name="delivery"
+                    value="pickup"
                     checked={deliveryMethod === 'pickup'}
                     onChange={() => handleDeliveryChange('pickup')}
                     style={{ marginTop: '0.25rem' }}
@@ -663,17 +679,10 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
             {/* Itemized List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginBottom: '1.5rem', maxHeight: '300px', overflowY: 'auto' }}>
-              {items.map((line: any) => {
-                const sample = sampleProducts[line.productId];
-                const title = line.productTitle || sample?.title || `منتج #${line.productId}`;
-                const variantName = line.variantTitle || line.variantName;
-                const hasPrinting = Boolean(line.artworkAssetId || line.printingNotes);
-                const printingCost =
-                  line.lineCustomizationFee ??
-                  (hasPrinting ? (sample?.customizationFee || 0) * line.quantity : 0);
-                const lineTotal =
-                  line.lineTotal ??
-                  ((sample?.basePrice || 0) * line.quantity + printingCost);
+              {(quote?.items ?? []).map((line) => {
+                const title = line.title;
+                const variantName = line.variantTitle;
+                const lineTotal = line.lineTotal;
 
                 return (
                   <div
@@ -693,9 +702,9 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                     <div style={{ color: 'var(--text-muted)', marginTop: '0.25rem' }}>
                       {line.quantity} {isArabic ? 'قطع' : 'units'} {variantName ? `• ${variantName}` : ''}
                     </div>
-                    {hasPrinting && (
+                    {line.lineCustomizationFee > 0 && (
                       <div style={{ color: 'var(--brand-primary)', marginTop: '0.15rem' }}>
-                        🎨 {isArabic ? `شعار مخصص (+${printingCost} ج.م)` : `Branded (+${printingCost} EGP)`}
+                        🎨 {isArabic ? `شعار مخصص (+${line.lineCustomizationFee} ج.م)` : `Branded (+${line.lineCustomizationFee} EGP)`}
                       </div>
                     )}
                   </div>
@@ -707,13 +716,13 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
             <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.875rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                 <span>{isArabic ? 'إجمالي المنتجات الأساسية:' : 'Base Products Subtotal:'}</span>
-                <span>{calculation.subtotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
+                <span>{(quote?.subtotal ?? 0).toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
               </div>
 
-              {calculation.totalCustomizationFees > 0 && (
+              {(quote?.totalCustomizationFees ?? 0) > 0 && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                   <span>{isArabic ? 'رسوم الطباعة والتخصيص:' : 'Customization & Branding:'}</span>
-                  <span>{calculation.totalCustomizationFees.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
+                  <span>{(quote?.totalCustomizationFees ?? 0).toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
                 </div>
               )}
 
@@ -735,7 +744,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                 }}
               >
                 <span>{isArabic ? 'الإجمالي المقدّر (الشحن مؤقت حتى اعتماد D-015):' : 'Estimated Total (shipping provisional per D-015):'}</span>
-                <span>{calculation.grandTotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
+                <span>{quote ? quote.grandTotal.toLocaleString() : '—'} {isArabic ? 'ج.م' : 'EGP'}</span>
               </div>
             </div>
 
@@ -764,7 +773,7 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                 variant="primary"
                 size="lg"
                 type="submit"
-                disabled={!calculation.canCheckout || !quoteReady}
+                disabled={!quote?.canCheckout || !quoteReady}
                 loading={isSubmitting}
                 loadingText={isArabic ? 'جاري تأكيد وتسجيل الطلب...' : 'Processing Order...'}
                 style={{ width: '100%', fontWeight: 700 }}

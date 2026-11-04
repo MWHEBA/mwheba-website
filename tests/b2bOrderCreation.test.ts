@@ -1,4 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import React, { act } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Window } from 'happy-dom';
+import { CartProvider } from '@/modules/cart-checkout/context/CartContext';
+import { CheckoutView } from '@/modules/cart-checkout/ui/CheckoutView';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
@@ -1523,6 +1528,242 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       expect(order2.isIdempotentReplay).toBe(false);
       expect(order2.orderId).not.toBe(order1.orderId);
       expect(order2.orderNumber).not.toBe(order1.orderNumber);
+    });
+  });
+
+  // =========================================================================
+  // 11. Displayed vs saved amount: server-driven summary, drift => 409
+  // =========================================================================
+  describe('11. Server-driven checkout summary and price-drift protection', () => {
+    const customerFor = (tag: string) => ({
+      email: `${tag}_${Date.now()}_${Math.floor(Math.random() * 1e6)}@mwheba.test`,
+      password: 'SecurePassword2026!',
+      companyName: `${tag} Corp`,
+      contactPerson: 'Test Buyer',
+      phone: '+201012345678',
+    });
+
+    const makeCartWithItem = async () => {
+      const cart = await getOrCreateCart(payload);
+      cleanupCartIds.push(cart.id);
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: { items: [{ product: physicalProductA.id, quantity: 10 }] },
+      });
+      return cart;
+    };
+
+    const setFlaskPrice = async (price: number) => {
+      await payload.update({
+        collection: 'products',
+        id: physicalProductA.id,
+        data: { basePrice: price, priceInEGP: price },
+      });
+    };
+
+    const post = (url: string, cookie: string, body: any, headers: Record<string, string> = {}) =>
+      new NextRequest(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: cookie, ...headers },
+        body: JSON.stringify(body),
+      });
+
+    it('rejects with 409 and a refreshed quote when a product price changes after the quote, then accepts the updated total', async () => {
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+
+      try {
+        const quote = await (
+          await quoteRoute(post('http://localhost:3000/api/checkout/quote', cookie, { delivery: { method: 'pickup' } }))
+        ).json();
+        expect(quote.grandTotal).toBe(2000);
+        expect(quote.items).toHaveLength(1);
+        expect(quote.items[0].title).toBe('B2B Thermal Flask Executive');
+
+        // Price changes between display and confirmation
+        await setFlaskPrice(260);
+
+        const staleRes = await checkoutRoute(
+          post('http://localhost:3000/api/checkout/create-order', cookie, {
+            customer: customerFor('drift'),
+            delivery: { method: 'pickup' },
+            paymentMethod: 'bank_transfer',
+            expectedGrandTotal: quote.grandTotal,
+          })
+        );
+        expect(staleRes.status).toBe(409);
+        const stale = await staleRes.json();
+        expect(stale.error).toContain('PRICE_QUOTE_MISMATCH');
+        expect(stale.updatedQuote.grandTotal).toBe(2600);
+        expect(stale.updatedQuote.items[0].unitPrice).toBe(260);
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+
+        // Re-confirm with the refreshed total: saved amount equals the displayed amount
+        const okRes = await checkoutRoute(
+          post('http://localhost:3000/api/checkout/create-order', cookie, {
+            customer: customerFor('drift_ok'),
+            delivery: { method: 'pickup' },
+            paymentMethod: 'bank_transfer',
+            expectedGrandTotal: stale.updatedQuote.grandTotal,
+          })
+        );
+        expect(okRes.status).toBe(201);
+        const ok = await okRes.json();
+        cleanupOrderIds.push(ok.orderId);
+        cleanupUserIds.push(ok.customerId);
+        const saved = await payload.findByID({ collection: 'orders', id: ok.orderId });
+        expect(Number(saved.amount ?? saved.total)).toBe(stale.updatedQuote.grandTotal);
+      } finally {
+        await setFlaskPrice(200);
+      }
+    });
+
+    it('CheckoutView renders items/totals from the server quote, switches shipping/pickup, and re-confirms after price drift (409)', async () => {
+      (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+      const window = new Window();
+      const document = window.document;
+      const originalWindow = global.window;
+      const originalDocument = global.document;
+      const originalFetch = global.fetch;
+      global.window = window as any;
+      global.document = document as any;
+      // next/link relies on `self` (requestIdleCallback fallback) in the browser
+      const originalSelf = (globalThis as any).self;
+      (globalThis as any).self = globalThis;
+
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
+        const method = init?.method || 'GET';
+        const req = new NextRequest(`http://localhost:3000${url}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Cookie: cookie, ...(init?.headers || {}) },
+          body: init?.body,
+        });
+        if (url.startsWith('/api/cart/items')) return cartItemsGet(req);
+        if (url.startsWith('/api/checkout/quote')) return quoteRoute(req);
+        if (url.startsWith('/api/checkout/create-order')) return checkoutRoute(req);
+        throw new Error(`Unexpected fetch ${url}`);
+      }) as any;
+
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container as any);
+      const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      // toLocaleString follows the host locale; normalise Arabic-Indic digits/separators for stable assertions
+      const text = () =>
+        (container.textContent || '')
+          .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+          .replace(/\u066C/g, ',');
+      const waitFor = async (predicate: () => boolean | Promise<boolean>, timeoutMs = 6000) => {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+          if (await predicate()) return;
+          await act(async () => {
+            await wait(100);
+          });
+        }
+        throw new Error(`waitFor timed out. Current text: ${text().slice(-700)}`);
+      };
+
+      const setValue = (el: any, value: string) => {
+        const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        // Drive the component's own onChange handler (happy-dom input events do not reach React's tracked value setter)
+        const propsKey = Object.keys(el).find((k) => k.startsWith('__reactProps$'));
+        const props = propsKey ? el[propsKey] : null;
+        if (!props?.onChange) throw new Error('Input has no React onChange handler');
+        Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+        props.onChange({ target: el, currentTarget: el });
+      };
+
+      try {
+        await act(async () => {
+          root.render(
+            React.createElement(CartProvider, null, React.createElement(CheckoutView, { locale: 'en' }))
+          );
+          await wait(50);
+        });
+        await waitFor(() => text().includes('2,080'));
+
+        // Items and totals come from the server quote (shipping default = Cairo provisional tariff)
+        expect(text()).toContain('B2B Thermal Flask Executive');
+        expect(text()).toContain('80 EGP (provisional D-015)');
+        expect(text()).toContain('2,080');
+        expect(text()).not.toContain('Final Grand Total');
+
+        // Select pickup from the component
+        const pickup = container.querySelector('input[name="delivery"][value="pickup"]') as any;
+        const shipping = container.querySelector('input[name="delivery"][value="shipping"]') as any;
+        await act(async () => {
+          pickup.click();
+          await wait(50);
+        });
+        await waitFor(() => text().includes('Free (Pickup)') && text().includes('2,000'));
+        expect(pickup.checked).toBe(true);
+        expect(text()).toContain('Free (Pickup)');
+        expect(text()).toContain('2,000');
+
+        // Back to shipping
+        await act(async () => {
+          shipping.click();
+          await wait(50);
+        });
+        await waitFor(() => text().includes('2,080'));
+        expect(shipping.checked).toBe(true);
+        expect(text()).toContain('2,080');
+
+        // Fill the form
+        await act(async () => {
+          container.querySelectorAll('input, textarea').forEach((el: any) => {
+            if (el.type === 'radio' || el.type === 'checkbox') return;
+            if (el.type === 'email') setValue(el, `view_${Date.now()}@mwheba.test`);
+            else if (el.type === 'password') setValue(el, 'SecurePassword2026!');
+            else if (el.type === 'tel') setValue(el, '+201012345678');
+            else if (!el.value) setValue(el, 'Test Value');
+          });
+          await wait(50);
+        });
+        // Price drifts after the quote was displayed
+        await setFlaskPrice(260);
+
+        const form = container.querySelector('form') as any;
+        await act(async () => {
+          form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+          await wait(50);
+        });
+        await waitFor(() => text().includes('Updated total'));
+
+        // 409: nothing saved, refreshed server total shown
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+        expect(text()).toContain('2,680');
+        expect(text()).toContain('Updated total');
+
+        // Re-confirm with the refreshed total
+        await act(async () => {
+          form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
+          await wait(50);
+        });
+        await waitFor(async () => (await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs === 1);
+        const orders = await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } });
+        expect(orders.totalDocs).toBe(1);
+        expect(Number(orders.docs[0].amount ?? (orders.docs[0] as any).total)).toBe(2680);
+        expect(orders.docs[0].shippingFee).toBe(80);
+        cleanupOrderIds.push(orders.docs[0].id);
+        const custId = typeof orders.docs[0].customer === 'object' ? (orders.docs[0].customer as any).id : orders.docs[0].customer;
+        cleanupUserIds.push(custId);
+      } finally {
+        await setFlaskPrice(200);
+        await act(async () => {
+          root.unmount();
+          await wait(20);
+        });
+        global.window = originalWindow;
+        global.document = originalDocument;
+        global.fetch = originalFetch;
+        (globalThis as any).self = originalSelf;
+      }
     });
   });
 });

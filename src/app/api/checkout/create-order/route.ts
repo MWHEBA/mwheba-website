@@ -4,8 +4,10 @@ import configPromise from '@/payload.config';
 import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { CART_COOKIE_NAME } from '@/modules/cart-checkout/services/cartStorage';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
+import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 
 export async function POST(req: NextRequest) {
+  let quoteContext: { cartId: number; method: 'shipping' | 'pickup'; governorate?: string } | null = null;
   try {
     const payload = await getPayload({ config: configPromise });
 
@@ -95,6 +97,11 @@ export async function POST(req: NextRequest) {
       undefined;
 
     // 5. Create order atomically inside PostgreSQL transaction
+    quoteContext = {
+      cartId: cart.id,
+      method: delivery.method === 'pickup' ? 'pickup' : 'shipping',
+      governorate: delivery.shippingAddress?.governorate,
+    };
     const result = await createOrderFromCart(payload, {
       cartId: cart.id,
       guestSecret: cart.secret,
@@ -103,6 +110,7 @@ export async function POST(req: NextRequest) {
       customer,
       delivery,
       paymentMethod,
+      expectedGrandTotal: typeof body.expectedGrandTotal === 'number' ? body.expectedGrandTotal : undefined,
     });
 
     const status = result.isIdempotentReplay ? 200 : 201;
@@ -125,10 +133,26 @@ export async function POST(req: NextRequest) {
     return response;
   } catch (error: any) {
     const statusCode = error.statusCode || 400;
+
+    // On a price/tariff drift, return the refreshed server quote so the client can re-confirm.
+    let updatedQuote: unknown;
+    if (statusCode === 409 && quoteContext && /QUOTE_MISMATCH/.test(String(error.message))) {
+      try {
+        const payload = await getPayload({ config: configPromise });
+        updatedQuote = await buildCheckoutQuote(payload, quoteContext.cartId, {
+          method: quoteContext.method,
+          governorate: quoteContext.governorate,
+        });
+      } catch {
+        updatedQuote = undefined;
+      }
+    }
+
     return NextResponse.json(
       {
         success: false,
         error: error.message || 'ORDER_CREATION_FAILED',
+        ...(updatedQuote ? { updatedQuote } : {}),
       },
       { status: statusCode }
     );
