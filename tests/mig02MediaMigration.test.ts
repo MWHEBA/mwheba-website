@@ -4,7 +4,11 @@ import config from '../src/payload.config';
 import type { Payload } from 'payload';
 import path from 'node:path';
 import fs from 'node:fs';
-import { importMedia } from '../src/scripts/migration/importMedia';
+import {
+  importMedia,
+  detectAndVerifyImageBuffer,
+  purgeDummyMediaRecords,
+} from '../src/scripts/migration/importMedia';
 import {
   allCatalogedMedia,
   legacyClientLogos,
@@ -12,7 +16,7 @@ import {
 } from '../src/scripts/migration/data/legacyMedia';
 import { privateUploadDir } from '../src/modules/customization/collections/Media';
 
-describe('MIG-02: Media Asset Migration & Filesystem Pipeline', () => {
+describe('MIG-02: Authentic Media Migration & Filesystem Pipeline', () => {
   let payload: Payload;
   const createdMediaIds: (string | number)[] = [];
 
@@ -29,95 +33,150 @@ describe('MIG-02: Media Asset Migration & Filesystem Pipeline', () => {
           overrideAccess: true,
         });
       } catch {
-        // ignore cleanup error
+        // ignore
       }
     }
   });
 
-  it('correctly cataloged 22 client logos and 5 agency branding assets', () => {
-    expect(legacyClientLogos.length).toBe(22);
-    expect(legacyAgencyBranding.length).toBe(5);
-    expect(allCatalogedMedia.length).toBe(27);
+  describe('1. Asset Verification & Magic Byte Detection', () => {
+    it('rejects dummy/small buffers (< 500 bytes)', () => {
+      const dummy1x1Png = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAA=',
+        'base64',
+      );
+      expect(() => detectAndVerifyImageBuffer(dummy1x1Png)).toThrow(
+        /Must be authentic asset >= 500 bytes/,
+      );
+    });
 
-    // Verify key audited clients from AUD-03
-    const slugs = allCatalogedMedia.map((m) => m.filename);
-    expect(slugs).toContain('oxford.png');
-    expect(slugs).toContain('bico-misr.png');
-    expect(slugs).toContain('truedent.png');
-    expect(slugs).toContain('Logo_MWHEBA-Wide-scaled.png');
-    expect(slugs).toContain('MWHEBA-Logo.jpg');
+    it('rejects buffers with non-image magic bytes', () => {
+      const fakeText = Buffer.alloc(1000, 'A');
+      expect(() => detectAndVerifyImageBuffer(fakeText)).toThrow(/magic bytes do not match/);
+    });
+
+    it('detects authentic PNG format from real disk assets', () => {
+      const realPngPath = path.resolve(process.cwd(), 'public/brand/logo-wide.png');
+      const buf = fs.readFileSync(realPngPath);
+      expect(buf.length).toBeGreaterThan(1000);
+      const mime = detectAndVerifyImageBuffer(buf);
+      expect(mime).toBe('image/png');
+    });
+
+    it('detects authentic WebP format from real disk assets', () => {
+      const realWebpPath = path.resolve(process.cwd(), 'public/brand/logo-wide.webp');
+      const buf = fs.readFileSync(realWebpPath);
+      expect(buf.length).toBeGreaterThan(1000);
+      const mime = detectAndVerifyImageBuffer(buf);
+      expect(mime).toBe('image/webp');
+    });
   });
 
-  it('imports all 27 cataloged image assets into media collection with public accessibility', async () => {
-    const summary = await importMedia(payload);
+  describe('2. Media Ingestion with Provenance & Pending Source Tracking', () => {
+    it('purges any legacy dummy records (< 500 bytes) from previous test runs', async () => {
+      const purged = await purgeDummyMediaRecords(payload);
+      expect(purged).toBeGreaterThanOrEqual(0);
+    });
 
-    expect(summary.total).toBe(27);
-    expect(summary.created + summary.updated).toBe(27);
+    it('ingests only authentic disk files, retaining missing assets as pending_source_file without fake records', async () => {
+      const report = await importMedia(payload);
 
-    // Query all created records
-    const allMedia = await payload.find({
-      collection: 'media',
-      where: {
-        filename: {
-          in: allCatalogedMedia.map((m) => m.filename),
+      // Verify overall counts
+      expect(report.totalCataloged).toBe(27);
+      expect(report.authenticFilesMigrated).toBeGreaterThan(0);
+      expect(report.pendingSourceFiles).toBeGreaterThan(0);
+      expect(report.authenticFilesMigrated + report.pendingSourceFiles).toBe(27);
+
+      // The 22 client logos (Oxford, Bico Misr, TrueDent, etc.) have no local source file on disk
+      // and MUST be held in pendingItems
+      expect(report.pendingItems.length).toBe(22);
+      const pendingFilenames = report.pendingItems.map((p) => p.catalogFilename);
+      expect(pendingFilenames).toContain('oxford.png');
+      expect(pendingFilenames).toContain('bico-misr.png');
+      expect(pendingFilenames).toContain('truedent.png');
+
+      // CRITICAL SECURITY / AUDIT RULE:
+      // Assert that NO documents were created in Payload for any pending client logos
+      const clientDocsInDb = await payload.find({
+        collection: 'media',
+        where: {
+          filename: {
+            in: legacyClientLogos.map((c) => c.catalogFilename),
+          },
         },
-      },
-      limit: 100,
-      overrideAccess: true,
+        limit: 100,
+        overrideAccess: true,
+      });
+
+      expect(clientDocsInDb.docs.length).toBe(0);
+
+      // Verify migrated authentic agency branding items
+      expect(report.migratedItems.length).toBe(report.authenticFilesMigrated);
+      for (const item of report.migratedItems) {
+        expect(item.size).toBeGreaterThan(500);
+        expect(item.fingerprint.length).toBe(64); // SHA-256 hash length
+        expect(item.mimeType).toBe('image/png');
+
+        // Confirm record in database
+        const dbDoc = await payload.find({
+          collection: 'media',
+          where: {
+            filename: { equals: item.catalogFilename },
+          },
+          limit: 1,
+          overrideAccess: true,
+        });
+
+        expect(dbDoc.docs.length).toBe(1);
+        const doc = dbDoc.docs[0];
+        createdMediaIds.push(doc.id);
+
+        expect(doc.mediaType).toBe('public');
+        expect(doc.filesize).toBe(item.size);
+        expect(doc.alt).toBeDefined();
+
+        // Confirm physical file exists on disk
+        const filePath = path.join(privateUploadDir, doc.filename as string);
+        expect(fs.existsSync(filePath)).toBe(true);
+      }
     });
 
-    expect(allMedia.docs.length).toBe(27);
+    it('demonstrates 100% idempotency: re-running importMedia updates in-place without duplicating', async () => {
+      const secondReport = await importMedia(payload);
 
-    for (const doc of allMedia.docs) {
-      createdMediaIds.push(doc.id);
+      expect(secondReport.totalCataloged).toBe(27);
+      expect(secondReport.authenticFilesMigrated).toBeGreaterThan(0);
+      expect(secondReport.pendingSourceFiles).toBe(22);
 
-      // Verify mediaType is public
-      expect(doc.mediaType).toBe('public');
-
-      // Verify alt text is populated
-      expect(doc.alt).toBeDefined();
-      expect((doc.alt as string).length).toBeGreaterThan(0);
-
-      // Verify physical file was written to disk in upload directory
-      const filePath = path.join(privateUploadDir, doc.filename as string);
-      expect(fs.existsSync(filePath)).toBe(true);
-    }
-  });
-
-  it('demonstrates 100% idempotency: running importMedia again updates in-place without creating duplicates', async () => {
-    const secondSummary = await importMedia(payload);
-
-    expect(secondSummary.created).toBe(0);
-    expect(secondSummary.updated).toBe(27);
-    expect(secondSummary.total).toBe(27);
-
-    const checkTotal = await payload.find({
-      collection: 'media',
-      where: {
-        filename: {
-          in: allCatalogedMedia.map((m) => m.filename),
+      const totalDocs = await payload.find({
+        collection: 'media',
+        where: {
+          filename: {
+            in: allCatalogedMedia.map((m) => m.catalogFilename),
+          },
         },
-      },
-      limit: 100,
-      overrideAccess: true,
+        limit: 100,
+        overrideAccess: true,
+      });
+
+      // Total docs in DB must equal authenticFilesMigrated, NOT duplicated
+      expect(totalDocs.docs.length).toBe(secondReport.authenticFilesMigrated);
     });
 
-    // Count must remain exactly 27, not 54
-    expect(checkTotal.docs.length).toBe(27);
-  });
+    it('allows unauthenticated visitors to read authentic public media assets', async () => {
+      const publicQuery = await payload.find({
+        collection: 'media',
+        where: {
+          mediaType: { equals: 'public' },
+        },
+        overrideAccess: false,
+        user: undefined,
+        limit: 10,
+      });
 
-  it('allows unauthenticated visitors to read public media assets', async () => {
-    const publicQuery = await payload.find({
-      collection: 'media',
-      where: {
-        filename: { equals: 'oxford.png' },
-      },
-      overrideAccess: false, // Simulate unauthenticated public request
-      user: undefined,
+      expect(publicQuery.docs.length).toBeGreaterThan(0);
+      for (const doc of publicQuery.docs) {
+        expect(doc.mediaType).toBe('public');
+      }
     });
-
-    expect(publicQuery.docs.length).toBe(1);
-    expect(publicQuery.docs[0].mediaType).toBe('public');
-    expect(publicQuery.docs[0].alt).toContain('أوكسفورد');
   });
 });

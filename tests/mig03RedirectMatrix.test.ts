@@ -43,8 +43,8 @@ describe('MIG-03: Edge Redirect Engine & 4-Tier URL Status Governance', () => {
         } else if (entry.action === 'GONE_410') {
           expect(result.action).toBe('GONE_410');
           expect(result.statusCode).toBe(410);
-        } else if (entry.action === 'REDIRECT_301' || entry.action === 'REQUIRES_REVIEW') {
-          expect(['REDIRECT_301', 'REQUIRES_REVIEW']).toContain(result.action);
+        } else if (entry.action === 'REDIRECT_301') {
+          expect(result.action).toBe('REDIRECT_301');
           expect(result.statusCode).toBe(301);
           expect(result.destination).toBe(entry.targetPath);
 
@@ -58,6 +58,12 @@ describe('MIG-03: Edge Redirect Engine & 4-Tier URL Status Governance', () => {
           const secondHop = edgeRedirectEngine.evaluate(targetPathOnly);
           expect(secondHop.action).not.toBe('REDIRECT_301');
           expect(secondHop.action).not.toBe('GONE_410');
+        } else if (entry.action === 'REQUIRES_REVIEW') {
+          expect(result.action).toBe('REQUIRES_REVIEW');
+          // Strict: Must NEVER be a 301 permanent redirect pending review
+          expect(result.statusCode).toBe(302);
+          expect(result.statusCode).not.toBe(301);
+          expect(result.destination).toBe(entry.targetPath);
         }
       });
     }
@@ -143,6 +149,17 @@ describe('MIG-03: Edge Redirect Engine & 4-Tier URL Status Governance', () => {
 
       expect(res.status).toBe(301);
       expect(res.headers.get('location')).toBe('https://mwheba.com/ar');
+    });
+
+    it('returns HTTP 302 with no-store for unreviewed/provisional routes (REQUIRES_REVIEW)', () => {
+      const req = new NextRequest('https://mwheba.com/product/social-media-managemnt-package/');
+      const res = middleware(req);
+
+      expect(res.status).toBe(302);
+      expect(res.status).not.toBe(301);
+      expect(res.headers.get('location')).toBe('https://mwheba.com/en/services/digital-marketing');
+      expect(res.headers.get('Cache-Control')).toContain('no-store');
+      expect(res.headers.get('X-Redirect-Status')).toBe('pending_owner_review');
     });
 
     it('passes through domain root and preserved system files', () => {

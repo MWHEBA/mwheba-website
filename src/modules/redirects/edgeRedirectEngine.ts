@@ -145,7 +145,7 @@ class RedirectEngine {
         };
       }
 
-      if (rule.action === 'REDIRECT_301' || rule.action === 'REQUIRES_REVIEW') {
+      if (rule.action === 'REDIRECT_301') {
         let destination = rule.targetPath;
 
         // Preserve and merge incoming query params
@@ -162,8 +162,33 @@ class RedirectEngine {
         }
 
         return {
-          action: rule.action,
+          action: 'REDIRECT_301',
           statusCode: 301,
+          destination,
+          rule,
+        };
+      }
+
+      if (rule.action === 'REQUIRES_REVIEW') {
+        let destination = rule.targetPath;
+
+        if (searchParams) {
+          const incomingSearch =
+            typeof searchParams === 'string'
+              ? searchParams.replace(/^\?/, '')
+              : searchParams.toString();
+
+          if (incomingSearch) {
+            const separator = destination.includes('?') ? '&' : '?';
+            destination = `${destination}${separator}${incomingSearch}`;
+          }
+        }
+
+        // Strict: Do NOT issue a permanent 301 for unreviewed/provisional routes.
+        // Return 302 temporary redirect pending owner determination (whether 410 or 301).
+        return {
+          action: 'REQUIRES_REVIEW',
+          statusCode: 302,
           destination,
           rule,
         };

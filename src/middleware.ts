@@ -18,13 +18,19 @@ export function middleware(request: NextRequest) {
     });
   }
 
-  if (
-    (evaluation.action === 'REDIRECT_301' || evaluation.action === 'REQUIRES_REVIEW') &&
-    evaluation.destination
-  ) {
+  if (evaluation.action === 'REDIRECT_301' && evaluation.destination) {
     const redirectUrl = new URL(evaluation.destination, request.url);
     const response = NextResponse.redirect(redirectUrl, 301);
     response.headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+    return response;
+  }
+
+  if (evaluation.action === 'REQUIRES_REVIEW' && evaluation.destination) {
+    const redirectUrl = new URL(evaluation.destination, request.url);
+    const response = NextResponse.redirect(redirectUrl, 302);
+    // Strict SEO rule: never permanently cache unreviewed/provisional redirects
+    response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    response.headers.set('X-Redirect-Status', 'pending_owner_review');
     return response;
   }
 
