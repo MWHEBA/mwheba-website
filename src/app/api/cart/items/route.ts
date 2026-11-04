@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
-import { sql } from '@payloadcms/db-postgres';
 import configPromise from '@/payload.config';
 import { readCartId, signCartId } from '@/modules/cart-checkout/logic/cartSession';
 import {
@@ -14,9 +13,10 @@ import {
 } from '@/modules/cart-checkout/services/cartStorage';
 
 /**
- * Helper to resolve cart ID from signed session cookie, authenticated user, or retried initial mutation.
+ * Helper to resolve cart from signed session cookie, guest secret, or authenticated customer.
+ * SECURITY INVARIANT: operationKey is NEVER used to look up or resolve carts.
  */
-async function resolveCart(req: NextRequest, payload: any, operationKey?: string) {
+async function resolveCart(req: NextRequest, payload: any) {
   const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
   const sessionCartId = readCartId(cookieVal);
 
@@ -63,39 +63,7 @@ async function resolveCart(req: NextRequest, payload: any, operationKey?: string
     // Guest flow
   }
 
-  // IDEMPOTENT FIRST ADD RESILIENCE:
-  // When a guest adds an item without an existing cookie, the server creates a cart and sends the cookie in the response.
-  // If that first response is dropped due to a network interruption, the client retries with the EXACT SAME operationKey
-  // but still has NO cookie. Here, we locate the cart already created and recorded for that operationKey
-  // rather than creating an unwanted second orphaned cart.
-  if (operationKey && typeof operationKey === 'string' && operationKey.trim()) {
-    const db = (payload.db as any).drizzle;
-    if (db) {
-      try {
-        const existingWithOp = await db.execute(sql`
-          SELECT id FROM "carts"
-          WHERE "applied_operations" @> jsonb_build_array(${operationKey.trim()}::text)
-            AND "purchased_at" IS NULL
-          LIMIT 1;
-        `);
-        if (existingWithOp.rows?.[0]?.id) {
-          const foundCart = await payload.findByID({
-            collection: 'carts',
-            id: existingWithOp.rows[0].id,
-            depth: 0,
-          });
-          if (foundCart && !foundCart.purchasedAt) {
-            // isNew: true re-issues the Set-Cookie header so the client receives the cookie lost on attempt 1
-            return { cart: foundCart, isNew: true };
-          }
-        }
-      } catch (err: any) {
-        // Log query error if any
-      }
-    }
-  }
-
-  // Initialize new guest cart with native Payload Ecommerce secret
+  // Initialize brand new guest cart for this unauthenticated requester
   const newCart = await getOrCreateCart(payload);
   return { cart: newCart, isNew: true };
 }
@@ -139,7 +107,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { cart, isNew } = await resolveCart(req, payload, operationKey.trim());
+    const { cart, isNew } = await resolveCart(req, payload);
 
     const summary = await addItemToCart(payload, cart.id, {
       productId,
@@ -285,14 +253,17 @@ export async function DELETE(req: NextRequest) {
 /**
  * GET /api/cart/items
  * Reads current cart state using session cookie or guest secret query param.
+ * If ?init=true is specified and no active session exists, bootstraps a signed guest session.
  */
 export async function GET(req: NextRequest) {
   try {
     const payload = await getPayload({ config: configPromise });
     const { searchParams } = new URL(req.url);
     const guestSecret = searchParams.get('secret');
+    const shouldInit = searchParams.get('init') === 'true';
 
     let cartId: number | null = null;
+    let guestSecretVal: string | null = null;
 
     if (guestSecret) {
       // Find guest cart strictly by native Payload Ecommerce secret
@@ -302,14 +273,59 @@ export async function GET(req: NextRequest) {
         limit: 1,
         depth: 0,
       });
-      if (carts.docs?.[0]) {
+      if (carts.docs?.[0] && !carts.docs[0].purchasedAt) {
         cartId = carts.docs[0].id;
+        guestSecretVal = carts.docs[0].secret ?? null;
       }
     }
 
     if (!cartId) {
       const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
       cartId = readCartId(cookieVal);
+    }
+
+    if (!cartId) {
+      // Check authenticated customer
+      try {
+        const authResult = await payload.auth({ headers: req.headers });
+        if (authResult?.user?.id) {
+          const userCarts = await payload.find({
+            collection: 'carts',
+            where: { customer: { equals: authResult.user.id } },
+            limit: 1,
+            depth: 0,
+          });
+          if (userCarts.docs?.[0] && !userCarts.docs[0].purchasedAt) {
+            cartId = userCarts.docs[0].id;
+          }
+        }
+      } catch {
+        // Guest flow
+      }
+    }
+
+    // Bootstrap signed guest session if requested and no active cart exists
+    if (!cartId && shouldInit) {
+      const newCart = await getOrCreateCart(payload);
+      const activeCartId = newCart.id;
+      const secret = newCart.secret ?? null;
+      const summary = await getCartSummary(payload, activeCartId);
+
+      const response = NextResponse.json({
+        cartId: activeCartId,
+        guestSecret: secret,
+        summary,
+      });
+
+      response.cookies.set(CART_COOKIE_NAME, signCartId(activeCartId), {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+        maxAge: 60 * 60 * 24 * 30,
+      });
+
+      return response;
     }
 
     if (!cartId) {
@@ -329,6 +345,7 @@ export async function GET(req: NextRequest) {
     const summary = await getCartSummary(payload, cartId);
     return NextResponse.json({
       cartId,
+      guestSecret: guestSecretVal,
       summary,
     });
   } catch (err: any) {

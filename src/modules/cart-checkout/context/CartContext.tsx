@@ -99,6 +99,35 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, [refreshCart]);
 
   /**
+   * Ensures a signed guest session cookie is established BEFORE executing mutations.
+   * If a session/cartId is already tracked, returns it immediately.
+   * Otherwise, calls GET /api/cart/items?init=true so the server sets the signed cookie.
+   */
+  const ensureSession = useCallback(async (): Promise<number | null> => {
+    if (cartId) return cartId;
+    try {
+      const res = await fetch('/api/cart/items?init=true', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.cartId) {
+          setCartId(data.cartId);
+          if (data.summary) {
+            setSummary(data.summary);
+            setItems(data.summary.items || []);
+          }
+          return data.cartId;
+        }
+      }
+    } catch {
+      // In case session pre-initialization fails, let mutation proceed
+    }
+    return null;
+  }, [cartId]);
+
+  /**
    * Adds an item to the persistent PostgreSQL cart with retry & idempotency.
    */
   const addItem = useCallback(
@@ -106,6 +135,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setError(null);
       setIsLoading(true);
       try {
+        // Initialize signed session before mutation so subsequent attempts share the same session
+        await ensureSession();
+
         await executeWithOperationRetry(
           async (operationKey) => {
             const res = await fetch('/api/cart/items', {
@@ -144,7 +176,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
       }
     },
-    []
+    [ensureSession]
   );
 
   /**
@@ -159,6 +191,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setError(null);
       setIsLoading(true);
       try {
+        await ensureSession();
+
         await executeWithOperationRetry(
           async (operationKey) => {
             let res: Response;
@@ -197,7 +231,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
       }
     },
-    [items]
+    [items, ensureSession]
   );
 
   /**
@@ -212,6 +246,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
       setError(null);
       setIsLoading(true);
       try {
+        await ensureSession();
+
         await executeWithOperationRetry(
           async (operationKey) => {
             let res: Response;
@@ -250,45 +286,50 @@ export function CartProvider({ children }: { children: ReactNode }) {
         setIsLoading(false);
       }
     },
-    [items]
+    [items, ensureSession]
   );
 
   /**
    * Removes a line item with idempotent retry.
    */
-  const removeItem = useCallback(async (id: string) => {
-    setError(null);
-    setIsLoading(true);
-    try {
-      await executeWithOperationRetry(
-        async (operationKey) => {
-          const res = await fetch('/api/cart/items', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ itemId: id, operationKey }),
-          });
+  const removeItem = useCallback(
+    async (id: string) => {
+      setError(null);
+      setIsLoading(true);
+      try {
+        await ensureSession();
 
-          if (!res.ok) {
-            const errBody = await res.json().catch(() => ({}));
-            throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
-          }
+        await executeWithOperationRetry(
+          async (operationKey) => {
+            const res = await fetch('/api/cart/items', {
+              method: 'DELETE',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ itemId: id, operationKey }),
+            });
 
-          const data = await res.json();
-          if (data.summary) {
-            setSummary(data.summary);
-            setItems(data.summary.items || []);
-          }
-          return data;
-        },
-        'remove'
-      );
-    } catch (err: any) {
-      setError(err.message || 'Failed to remove item');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+            if (!res.ok) {
+              const errBody = await res.json().catch(() => ({}));
+              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
+            }
+
+            const data = await res.json();
+            if (data.summary) {
+              setSummary(data.summary);
+              setItems(data.summary.items || []);
+            }
+            return data;
+          },
+          'remove'
+        );
+      } catch (err: any) {
+        setError(err.message || 'Failed to remove item');
+        throw err;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [ensureSession]
+  );
 
   /**
    * Clears the persistent cart completely with idempotent retry.
@@ -297,6 +338,8 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setError(null);
     setIsLoading(true);
     try {
+      await ensureSession();
+
       await executeWithOperationRetry(
         async (operationKey) => {
           const res = await fetch('/api/cart/items', {
@@ -327,7 +370,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [ensureSession]);
 
   // Map hydrated server items to lightweight CartLineItem format
   const rawItems: CartLineItem[] = useMemo(() => {

@@ -945,7 +945,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       }
     });
 
-    it('handles dropped response on first guest add without cookie: re-links retried attempt to the SAME cart, ensuring strictly ONE cart and ONE line item in PostgreSQL', async () => {
+    it('handles dropped response on first guest add: initializes signed session before mutation, reuses session and operationKey on retry, ensuring strictly ONE cart and ONE line item in PostgreSQL', async () => {
       (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
       const window = new Window();
       const document = window.document;
@@ -965,20 +965,41 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const preCheck = await db.execute(sql`SELECT count(*)::int as count FROM "carts";`);
       const initialCartsCount = preCheck.rows[0].count;
 
-      // Simulate a guest with NO initial cookie who experiences a network interruption on first POST
-      let attemptCount = 0;
+      // Simulate a guest with NO initial cookie: session is initialized before mutation,
+      // and network interruption occurs on first POST response
+      let postAttemptCount = 0;
       let capturedFirstOpKey = '';
       let serverCreatedCartId: number | null = null;
       let simulatedClientCookie = '';
 
       global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
+        // Handle session initialization: GET /api/cart/items?init=true
+        if (url.includes('/api/cart/items') && (!init || init.method === 'GET')) {
+          const req = new NextRequest(`http://localhost:3000${url}`, {
+            method: 'GET',
+            headers: simulatedClientCookie ? { Cookie: simulatedClientCookie } : {},
+          });
+          const res = await cartItemsGetRoute(req);
+          const cookieHeader = res.headers.get('set-cookie');
+          if (cookieHeader) {
+            const match = cookieHeader.match(/mwheba_cart=([^;]+)/);
+            if (match) simulatedClientCookie = `mwheba_cart=${match[1]}`;
+          }
+          const cloned = res.clone();
+          const json = await cloned.json().catch(() => ({}));
+          if (json.cartId) {
+            serverCreatedCartId = json.cartId;
+            createdCartIds.push(json.cartId);
+          }
+          return res;
+        }
+
         if (url === '/api/cart/items' && init?.method === 'POST') {
-          attemptCount++;
+          postAttemptCount++;
           const body = JSON.parse(init.body);
           capturedFirstOpKey = body.operationKey;
 
-          // Request 1: has NO cookie header
-          // Request 2 (retry): also has NO cookie header (because client never received attempt 1's Set-Cookie)
+          // Request includes the established session cookie
           const headers: Record<string, string> = {
             'Content-Type': 'application/json',
           };
@@ -994,35 +1015,22 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
 
           const res = await cartItemsPostRoute(req);
           const clonedRes = res.clone();
-          const json = await clonedRes.json();
+          const json = await clonedRes.json().catch(() => ({}));
           if (json.cartId) {
             serverCreatedCartId = json.cartId;
             createdCartIds.push(json.cartId);
           }
 
-          if (attemptCount === 1) {
-            // First attempt: Server creates cart and sets cookie header,
+          if (postAttemptCount === 1) {
+            // First attempt: Server creates item in PostgreSQL within the established session,
             // BUT network drops on the wire before client receives response!
             const netErr: any = new Error('fetch failed: connection terminated by peer');
             netErr.name = 'TypeError';
             throw netErr;
           }
 
-          // Second attempt: Network succeeds! Client finally gets response and stores the cookie
-          const cookieHeader = res.headers.get('set-cookie');
-          if (cookieHeader) {
-            const match = cookieHeader.match(/mwheba_cart=([^;]+)/);
-            if (match) simulatedClientCookie = `mwheba_cart=${match[1]}`;
-          }
+          // Second attempt (retry): Network succeeds! Client receives idempotent summary
           return res;
-        }
-
-        if (url === '/api/cart/items' && (!init || init.method === 'GET')) {
-          const req = new NextRequest('http://localhost:3000/api/cart/items', {
-            method: 'GET',
-            headers: simulatedClientCookie ? { Cookie: simulatedClientCookie } : {},
-          });
-          return await cartItemsGetRoute(req);
         }
 
         return new Response('Not found', { status: 404 });
@@ -1056,15 +1064,15 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
           await new Promise((resolve) => setTimeout(resolve, 30));
         });
 
-        // Trigger first add: this will fail on attempt 1, and executeWithOperationRetry will auto-retry
+        // Trigger first add: ensureSession runs, then POST attempt 1 fails, and executeWithOperationRetry retries inside same session
         const btnFirstAdd = container.querySelector('#btn-first-add') as any;
         await act(async () => {
           btnFirstAdd.click();
           await new Promise((resolve) => setTimeout(resolve, 150));
         });
 
-        // Assert that exactly 2 network attempts were made (1 failure + 1 retry)
-        expect(attemptCount).toBe(2);
+        // Assert that exactly 2 POST attempts were made (1 failure + 1 retry)
+        expect(postAttemptCount).toBe(2);
         expect(capturedFirstOpKey).toMatch(/^op_add_/);
 
         // Assert UI state updated correctly after retry
@@ -1294,23 +1302,40 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(dataHeader.cartId).toBeUndefined();
       expect(dataHeader.items.length).toBe(0);
 
-      // 4. Re-sending POST with victimOpKey is strictly idempotent: it re-links to the transaction but CANNOT alter or inflate quantities
-      const replayReqPost = new NextRequest('http://localhost:3000/api/cart/items', {
+      // 4. Attacker attempts to hijack or mutate victim's cart by sending POST with victim's operationKey and NO cookie
+      const attackerReqPost = new NextRequest('http://localhost:3000/api/cart/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productId: physicalProductA.id,
-          quantity: 50, // attempts to add 50 more units with the reused opKey
+          quantity: 50,
           operationKey: victimOpKey,
         }),
       });
-      const resPost = await cartItemsPostRoute(replayReqPost);
+      const resPost = await cartItemsPostRoute(attackerReqPost);
       expect(resPost.ok).toBe(true);
       const dataPost = await resPost.json();
-      expect(dataPost.cartId).toBe(victimCart.id);
-      // Idempotency strictly prevented inflating the quantity: remains 25, NOT 25 + 50!
-      expect(dataPost.summary.totalItemsCount).toBe(25);
 
+      // SECURITY ASSERTIONS:
+      // a) Attacker MUST NOT receive victim's cartId (receives their own new cart)
+      expect(dataPost.cartId).toBeDefined();
+      expect(dataPost.cartId).not.toBe(victimCart.id);
+      createdCartIds.push(dataPost.cartId);
+
+      // b) Attacker MUST NOT receive victim's guest secret
+      expect(dataPost.guestSecret).toBeDefined();
+      expect(dataPost.guestSecret).not.toBe(victimCart.secret);
+
+      // c) Attacker MUST NOT receive a session cookie for victim's cart
+      const attackerCookieHeader = resPost.headers.get('set-cookie');
+      if (attackerCookieHeader) {
+        expect(attackerCookieHeader).not.toContain(signCartId(victimCart.id));
+      }
+
+      // d) Attacker response summary MUST NOT reveal victim's items
+      expect(dataPost.summary.totalItemsCount).toBe(50); // Attacker's own 50 units, not victim's 25
+
+      // e) Victim's cart in PostgreSQL remains strictly untouched
       const unchangedVictim = await getCartSummary(payload, victimCart.id);
       expect(unchangedVictim.totalItemsCount).toBe(25);
       expect(unchangedVictim.items[0].quantity).toBe(25);
