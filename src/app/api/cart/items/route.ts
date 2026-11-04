@@ -118,6 +118,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Line-Level Artwork Ownership Verification (B2B-03)
+    if (artworkAssetId) {
+      let assetDoc: any = null;
+      try {
+        assetDoc = await payload.findByID({
+          collection: 'artwork-assets',
+          id: artworkAssetId,
+          depth: 0,
+        });
+      } catch {
+        return NextResponse.json(
+          { error: 'ARTWORK_NOT_FOUND', message: 'The referenced artwork asset does not exist.' },
+          { status: 422 }
+        );
+      }
+
+      if (!assetDoc) {
+        return NextResponse.json(
+          { error: 'ARTWORK_NOT_FOUND', message: 'The referenced artwork asset does not exist.' },
+          { status: 422 }
+        );
+      }
+
+      const isOwnerSession = assetDoc.ownerSession && String(assetDoc.ownerSession) === String(cart.id);
+      const isOwnerCart = assetDoc.cart && String(assetDoc.cart) === String(cart.id);
+      const isOwnerUser = assetDoc.uploader && cart.customer && String(assetDoc.uploader) === String(cart.customer);
+
+      if (!isOwnerSession && !isOwnerCart && !isOwnerUser) {
+        return NextResponse.json(
+          {
+            error: 'FORBIDDEN_ARTWORK_ACCESS',
+            message: 'Cannot attach an artwork asset belonging to another session or user.',
+          },
+          { status: 403 }
+        );
+      }
+    }
+
     const summary = await addItemToCart(payload, cart.id, {
       productId,
       variantId: variantId ? Number(variantId) || variantId : undefined,

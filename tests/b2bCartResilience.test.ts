@@ -1250,6 +1250,20 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
 
+      const artwork = await payload.create({
+        collection: 'artwork-assets',
+        data: {
+          storageKey: 'mock/logo-test.png',
+          originalFilename: 'logo-test.png',
+          fileSize: 1024,
+          mimeType: 'image/png',
+          ownerSession: String(cart.id),
+          cart: cart.id,
+          status: 'pending_order',
+        },
+        overrideAccess: true,
+      });
+
       const signedCookie = signCartId(cart.id);
       const cookieHeader = `mwheba_cart=${signedCookie}`;
 
@@ -1270,7 +1284,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
           body: JSON.stringify({
             productId: physicalProductA.id,
             quantity: 10,
-            artworkAssetId: 'art-cust-test-01',
+            artworkAssetId: artwork.id,
             printingNotes: 'طباعة شعار الشركة بدقة ليزر',
             operationKey: opKey,
           }),

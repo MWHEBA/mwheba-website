@@ -83,6 +83,63 @@ export const ArtworkAssets: CollectionConfig = {
       name: 'notes',
       type: 'textarea',
     },
+    {
+      name: 'status',
+      type: 'select',
+      defaultValue: 'pending_order',
+      options: [
+        { label: 'Pending Order', value: 'pending_order' },
+        { label: 'Committed Order', value: 'committed_order' },
+        { label: 'Archived', value: 'archived' },
+      ],
+      admin: {
+        description: 'Lifecycle status of the artwork asset (pending_order until checkout freezes it).',
+      },
+    },
+    {
+      name: 'ownerSession',
+      type: 'text',
+      index: true,
+      admin: {
+        description: 'Signed session identifier or cart ID for guest session uploaders.',
+      },
+    },
+    {
+      name: 'cart',
+      type: 'relationship',
+      relationTo: 'carts',
+      index: true,
+      admin: {
+        description: 'Linked active cart for line-level artwork association.',
+      },
+    },
+    {
+      name: 'lineItemId',
+      type: 'text',
+      admin: {
+        description: 'Specific cart line item ID bound to this artwork file.',
+      },
+    },
+    {
+      name: 'sha256',
+      type: 'text',
+      admin: {
+        description: 'Cryptographic SHA-256 checksum of the uploaded file.',
+      },
+    },
+    {
+      name: 'scanStatus',
+      type: 'select',
+      defaultValue: 'clean',
+      options: [
+        { label: 'Clean', value: 'clean' },
+        { label: 'Flagged', value: 'flagged' },
+        { label: 'Unscanned', value: 'unscanned' },
+      ],
+      admin: {
+        description: 'Antivirus and malware content inspection scan status.',
+      },
+    },
   ],
   hooks: {
     beforeChange: [

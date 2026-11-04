@@ -542,8 +542,198 @@ export interface ArtworkAsset {
   };
   uploader?: (number | null) | User;
   notes?: string | null;
+  /**
+   * Lifecycle status of the artwork asset (pending_order until checkout freezes it).
+   */
+  status?: ('pending_order' | 'committed_order' | 'archived') | null;
+  /**
+   * Signed session identifier or cart ID for guest session uploaders.
+   */
+  ownerSession?: string | null;
+  /**
+   * Linked active cart for line-level artwork association.
+   */
+  cart?: (number | null) | Cart;
+  /**
+   * Specific cart line item ID bound to this artwork file.
+   */
+  lineItemId?: string | null;
+  /**
+   * Cryptographic SHA-256 checksum of the uploaded file.
+   */
+  sha256?: string | null;
+  /**
+   * Antivirus and malware content inspection scan status.
+   */
+  scanStatus?: ('clean' | 'flagged' | 'unscanned') | null;
   updatedAt: string;
   createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "carts".
+ */
+export interface Cart {
+  id: number;
+  items?:
+    | {
+        product?: (number | null) | Product;
+        variant?: (number | null) | Variant;
+        quantity: number;
+        /**
+         * Attached customer vector logo / artwork reference
+         */
+        artworkAssetId?: string | null;
+        /**
+         * Specific customization notes for this line
+         */
+        printingNotes?: string | null;
+        /**
+         * Itemized separate printing fee for this line
+         */
+        customizationFee?: number | null;
+        id?: string | null;
+      }[]
+    | null;
+  secret?: string | null;
+  customer?: (number | null) | User;
+  purchasedAt?: string | null;
+  status?: ('active' | 'purchased' | 'abandoned') | null;
+  subtotal?: number | null;
+  currency?: 'EGP' | null;
+  /**
+   * Independent idempotency operation keys applied to this cart
+   */
+  appliedOperations?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "products".
+ */
+export interface Product {
+  id: number;
+  title: string;
+  slug: string;
+  /**
+   * Base price in EGP for products without complex variant pricing.
+   */
+  basePrice?: number | null;
+  productType: 'physical' | 'fixed_service';
+  /**
+   * Compatibility alias for cart & MOQ calculation engine.
+   */
+  itemType?: ('physical' | 'service') | null;
+  description?: string | null;
+  category?: (number | null) | Category;
+  /**
+   * Minimum order quantity enforced across all variants (D-009). Strictly 10 for physical, 1 for services.
+   */
+  minOrderQuantity?: number | null;
+  /**
+   * Whether customers can upload corporate vector artwork for this product (D-010).
+   */
+  allowArtworkUpload?: boolean | null;
+  /**
+   * Separate printing / branding charge itemized independently (D-017).
+   */
+  customizationFee?: number | null;
+  /**
+   * Structured deliverables included in this fixed-price agency service package.
+   */
+  serviceDeliverables?:
+    | {
+        deliverable: string;
+        id?: string | null;
+      }[]
+    | null;
+  /**
+   * Estimated business days for project intake and fulfillment.
+   */
+  estimatedTurnaroundDays?: number | null;
+  /**
+   * Intake brief questionnaire presented to corporate client upon ordering.
+   */
+  briefQuestions?:
+    | {
+        question: string;
+        required?: boolean | null;
+        id?: string | null;
+      }[]
+    | null;
+  enableVariants?: boolean | null;
+  variantTypes?: (number | VariantType)[] | null;
+  variants?: {
+    docs?: (number | Variant)[];
+    hasNextPage?: boolean;
+    totalDocs?: number;
+  };
+  updatedAt: string;
+  createdAt: string;
+  deletedAt?: string | null;
+  _status?: ('draft' | 'published') | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "variantTypes".
+ */
+export interface VariantType {
+  id: number;
+  label: string;
+  name: string;
+  options?: {
+    docs?: (number | VariantOption)[];
+    hasNextPage?: boolean;
+    totalDocs?: number;
+  };
+  updatedAt: string;
+  createdAt: string;
+  deletedAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "variantOptions".
+ */
+export interface VariantOption {
+  id: number;
+  _variantOptions_options_order?: string | null;
+  variantType: number | VariantType;
+  label: string;
+  /**
+   * should be defaulted or dynamic based on label
+   */
+  value: string;
+  updatedAt: string;
+  createdAt: string;
+  deletedAt?: string | null;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "variants".
+ */
+export interface Variant {
+  id: number;
+  /**
+   * Used for administrative purposes, not shown to customers. This is populated by default.
+   */
+  title?: string | null;
+  product: number | Product;
+  options: (number | VariantOption)[];
+  priceInEGPEnabled?: boolean | null;
+  priceInEGP?: number | null;
+  updatedAt: string;
+  createdAt: string;
+  deletedAt?: string | null;
+  _status?: ('draft' | 'published') | null;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -692,125 +882,6 @@ export interface Order {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "products".
- */
-export interface Product {
-  id: number;
-  title: string;
-  slug: string;
-  /**
-   * Base price in EGP for products without complex variant pricing.
-   */
-  basePrice?: number | null;
-  productType: 'physical' | 'fixed_service';
-  /**
-   * Compatibility alias for cart & MOQ calculation engine.
-   */
-  itemType?: ('physical' | 'service') | null;
-  description?: string | null;
-  category?: (number | null) | Category;
-  /**
-   * Minimum order quantity enforced across all variants (D-009). Strictly 10 for physical, 1 for services.
-   */
-  minOrderQuantity?: number | null;
-  /**
-   * Whether customers can upload corporate vector artwork for this product (D-010).
-   */
-  allowArtworkUpload?: boolean | null;
-  /**
-   * Separate printing / branding charge itemized independently (D-017).
-   */
-  customizationFee?: number | null;
-  /**
-   * Structured deliverables included in this fixed-price agency service package.
-   */
-  serviceDeliverables?:
-    | {
-        deliverable: string;
-        id?: string | null;
-      }[]
-    | null;
-  /**
-   * Estimated business days for project intake and fulfillment.
-   */
-  estimatedTurnaroundDays?: number | null;
-  /**
-   * Intake brief questionnaire presented to corporate client upon ordering.
-   */
-  briefQuestions?:
-    | {
-        question: string;
-        required?: boolean | null;
-        id?: string | null;
-      }[]
-    | null;
-  enableVariants?: boolean | null;
-  variantTypes?: (number | VariantType)[] | null;
-  variants?: {
-    docs?: (number | Variant)[];
-    hasNextPage?: boolean;
-    totalDocs?: number;
-  };
-  updatedAt: string;
-  createdAt: string;
-  deletedAt?: string | null;
-  _status?: ('draft' | 'published') | null;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "variantTypes".
- */
-export interface VariantType {
-  id: number;
-  label: string;
-  name: string;
-  options?: {
-    docs?: (number | VariantOption)[];
-    hasNextPage?: boolean;
-    totalDocs?: number;
-  };
-  updatedAt: string;
-  createdAt: string;
-  deletedAt?: string | null;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "variantOptions".
- */
-export interface VariantOption {
-  id: number;
-  _variantOptions_options_order?: string | null;
-  variantType: number | VariantType;
-  label: string;
-  /**
-   * should be defaulted or dynamic based on label
-   */
-  value: string;
-  updatedAt: string;
-  createdAt: string;
-  deletedAt?: string | null;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "variants".
- */
-export interface Variant {
-  id: number;
-  /**
-   * Used for administrative purposes, not shown to customers. This is populated by default.
-   */
-  title?: string | null;
-  product: number | Product;
-  options: (number | VariantOption)[];
-  priceInEGPEnabled?: boolean | null;
-  priceInEGP?: number | null;
-  updatedAt: string;
-  createdAt: string;
-  deletedAt?: string | null;
-  _status?: ('draft' | 'published') | null;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "transactions".
  */
 export interface Transaction {
@@ -843,53 +914,6 @@ export interface Transaction {
   cart?: (number | null) | Cart;
   amount?: number | null;
   currency?: 'EGP' | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "carts".
- */
-export interface Cart {
-  id: number;
-  items?:
-    | {
-        product?: (number | null) | Product;
-        variant?: (number | null) | Variant;
-        quantity: number;
-        /**
-         * Attached customer vector logo / artwork reference
-         */
-        artworkAssetId?: string | null;
-        /**
-         * Specific customization notes for this line
-         */
-        printingNotes?: string | null;
-        /**
-         * Itemized separate printing fee for this line
-         */
-        customizationFee?: number | null;
-        id?: string | null;
-      }[]
-    | null;
-  secret?: string | null;
-  customer?: (number | null) | User;
-  purchasedAt?: string | null;
-  status?: ('active' | 'purchased' | 'abandoned') | null;
-  subtotal?: number | null;
-  currency?: 'EGP' | null;
-  /**
-   * Independent idempotency operation keys applied to this cart
-   */
-  appliedOperations?:
-    | {
-        [k: string]: unknown;
-      }
-    | unknown[]
-    | string
-    | number
-    | boolean
-    | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -1623,6 +1647,12 @@ export interface ArtworkAssetsSelect<T extends boolean = true> {
       };
   uploader?: T;
   notes?: T;
+  status?: T;
+  ownerSession?: T;
+  cart?: T;
+  lineItemId?: T;
+  sha256?: T;
+  scanStatus?: T;
   updatedAt?: T;
   createdAt?: T;
 }
