@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual, randomUUID } from 'node:crypto';
-import { mkdir, writeFile, readFile, stat } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdir, writeFile, readFile, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { privateUploadDir } from '../collections/Media';
 
@@ -90,20 +91,55 @@ export async function saveArtworkFile(
 }
 
 /**
- * Resolves the absolute filesystem path for a storageKey with traversal protection.
+ * Resolves the absolute filesystem path for a storageKey with path.relative boundary check and symlink resolution.
  */
 export function resolveArtworkPath(storageKey: string): string {
   if (!storageKey || typeof storageKey !== 'string') {
     throw new Error('Invalid storage key.');
   }
 
-  const normalized = path.normalize(storageKey).replace(/^(\.\.(\/|\\|$))+/, '');
-  const absolute = path.resolve(privateUploadDir, normalized);
+  // Reject absolute paths and drive prefixes
+  if (
+    path.isAbsolute(storageKey) ||
+    storageKey.startsWith('/') ||
+    storageKey.startsWith('\\') ||
+    /^[a-zA-Z]:/.test(storageKey)
+  ) {
+    throw new Error('Path traversal rejected: Absolute paths are forbidden.');
+  }
 
-  // Path Traversal Guard: Ensure the resolved path resides strictly inside privateUploadDir
-  if (!absolute.startsWith(privateUploadDir)) {
+  const base = path.resolve(privateUploadDir);
+  const target = path.resolve(base, storageKey);
+  const rel = path.relative(base, target);
+
+  // Path Traversal Guard: Ensure the relative path does not escape base directory
+  if (rel.startsWith('..') || rel === '..' || path.isAbsolute(rel)) {
     throw new Error('Path traversal rejected: Attempted access outside private storage directory.');
   }
 
-  return absolute;
+  // Symlink Resolution Guard: If file/directory exists, verify realpath does not escape private directory
+  if (existsSync(target)) {
+    const realBase = existsSync(base) ? realpathSync(base) : base;
+    const realTarget = realpathSync(target);
+    const relReal = path.relative(realBase, realTarget);
+
+    if (relReal.startsWith('..') || relReal === '..' || path.isAbsolute(relReal)) {
+      throw new Error('Path traversal rejected: Symlink escapes private storage directory.');
+    }
+    return realTarget;
+  }
+
+  return target;
+}
+
+/**
+ * Safely removes a file from the private artwork store.
+ */
+export async function cleanupUploadedArtwork(storageKey: string): Promise<void> {
+  try {
+    const filePath = resolveArtworkPath(storageKey);
+    await unlink(filePath).catch(() => {});
+  } catch {
+    // Ignore resolution errors if file cannot be found or safely resolved
+  }
 }

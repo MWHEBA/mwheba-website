@@ -4,16 +4,18 @@ import configPromise from '@/payload.config';
 import { CART_COOKIE_NAME } from '@/modules/cart-checkout/services/cartStorage';
 import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { validateArtworkFile } from '@/modules/customization/lib/fileValidation';
-import { saveArtworkFile } from '@/modules/customization/lib/privateStorage';
+import { saveArtworkFile, cleanupUploadedArtwork } from '@/modules/customization/lib/privateStorage';
 
 /**
  * POST /api/customization/upload-artwork
  * Dedicated endpoint for corporate clients to upload line-level branding and vector artwork.
  * Enforces:
  * 1. Active session (cookie or user login)
- * 2. Strict file size (max 50MB) and magic bytes content inspection
- * 3. Storage in persistent private filesystem outside public web root
- * 4. Record creation in ArtworkAssets collection with status pending_order
+ * 2. Pre-upload cart and line item validation (if lineItemId is supplied)
+ * 3. Strict file size (max 50MB) and magic bytes content inspection
+ * 4. Storage in persistent private filesystem outside public web root
+ * 5. Record creation in ArtworkAssets collection via trusted context with scanStatus = 'unscanned'
+ * 6. Atomic binding to cart item with guaranteed rollback on failure
  */
 export async function POST(req: NextRequest) {
   try {
@@ -70,10 +72,52 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // 3. Pre-validate Cart & Line Item if requested BEFORE modifying disk or database
+    let targetCart: any = null;
+    if (lineItemId) {
+      if (!sessionCartId) {
+        return NextResponse.json(
+          {
+            error: 'CART_SESSION_REQUIRED',
+            message: 'Line item binding requires an active cart session.',
+          },
+          { status: 400 }
+        );
+      }
+
+      targetCart = await payload.findByID({
+        collection: 'carts',
+        id: sessionCartId,
+        depth: 0,
+      });
+
+      if (!targetCart) {
+        return NextResponse.json(
+          {
+            error: 'CART_NOT_FOUND',
+            message: 'The cart associated with this session was not found.',
+          },
+          { status: 404 }
+        );
+      }
+
+      const items = Array.isArray(targetCart.items) ? targetCart.items : [];
+      const itemExists = items.some((item: any) => item.id === lineItemId);
+      if (!itemExists) {
+        return NextResponse.json(
+          {
+            error: 'LINE_ITEM_NOT_FOUND',
+            message: `Line item '${lineItemId}' does not exist in the active cart.`,
+          },
+          { status: 422 }
+        );
+      }
+    }
+
     const originalFilename = (file as any).name || 'artwork.dat';
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    // 3. Strict Content & Magic Bytes Validation
+    // 4. Strict Content & Magic Bytes Validation
     const validation = validateArtworkFile(buffer, originalFilename, file.type);
 
     if (!validation.isValid) {
@@ -96,65 +140,75 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4. Save to Private Directory outside public_html
+    // 5. Save to Private Directory outside public_html
     const { storageKey } = await saveArtworkFile(buffer, validation.originalFilename);
 
-    // 5. Create ArtworkAssets Collection Record
-    const asset = await payload.create({
-      collection: 'artwork-assets',
-      data: {
-        storageKey,
-        originalFilename: validation.originalFilename,
-        fileSize: validation.fileSize,
-        mimeType: validation.mimeType,
-        sha256: validation.sha256,
-        status: 'pending_order',
-        verificationStatus: 'valid',
-        scanStatus: 'clean',
-        ownerSession: sessionCartId ? String(sessionCartId) : undefined,
-        cart: sessionCartId || undefined,
-        lineItemId,
-        uploader: authUser?.id || undefined,
-      },
-      depth: 0,
-    });
+    // 6. Create ArtworkAssets Collection Record via trusted context
+    // Note: scanStatus is explicitly 'unscanned' because format/magic-byte validation is NOT an antivirus clearance.
+    let asset: any;
+    try {
+      asset = await payload.create({
+        collection: 'artwork-assets',
+        data: {
+          storageKey,
+          originalFilename: validation.originalFilename,
+          fileSize: validation.fileSize,
+          mimeType: validation.mimeType,
+          sha256: validation.sha256,
+          status: 'pending_order',
+          verificationStatus: 'valid',
+          scanStatus: 'unscanned',
+          ownerSession: sessionCartId ? String(sessionCartId) : undefined,
+          cart: sessionCartId || undefined,
+          lineItemId,
+          uploader: authUser?.id || undefined,
+        },
+        context: { isTrustedUpload: true },
+        depth: 0,
+      });
+    } catch (createErr: any) {
+      await cleanupUploadedArtwork(storageKey);
+      throw createErr;
+    }
 
-    // 6. Optional: If lineItemId was provided, automatically bind to cart line item
-    if (sessionCartId && lineItemId) {
+    // 7. Atomic Binding to Cart Line Item (if requested)
+    if (targetCart && lineItemId) {
+      const updatedItems = (targetCart.items || []).map((item: any) => {
+        if (item.id === lineItemId) {
+          return {
+            ...item,
+            artworkAssetId: String(asset.id),
+          };
+        }
+        return item;
+      });
+
       try {
-        const cart = await payload.findByID({
+        await payload.update({
           collection: 'carts',
-          id: sessionCartId,
+          id: targetCart.id,
+          data: {
+            items: updatedItems,
+          },
           depth: 0,
         });
+      } catch (bindErr: any) {
+        // ROLLBACK: Delete written file and created database record if cart update fails
+        await cleanupUploadedArtwork(storageKey);
+        await payload.delete({
+          collection: 'artwork-assets',
+          id: asset.id,
+          context: { isTrustedUpload: true },
+          overrideAccess: true,
+        });
 
-        if (cart && Array.isArray(cart.items)) {
-          let updated = false;
-          const updatedItems = cart.items.map((item: any) => {
-            if (item.id === lineItemId) {
-              updated = true;
-              return {
-                ...item,
-                artworkAssetId: String(asset.id),
-              };
-            }
-            return item;
-          });
-
-          if (updated) {
-            await payload.update({
-              collection: 'carts',
-              id: sessionCartId,
-              data: {
-                items: updatedItems,
-              },
-              depth: 0,
-            });
-          }
-        }
-      } catch (err: any) {
-        // Non-blocking for upload response, logged for diagnostic audit
-        console.warn(`Line item binding warning for cart ${sessionCartId}:`, err?.message);
+        return NextResponse.json(
+          {
+            error: 'CART_BINDING_FAILED',
+            message: `Failed to bind artwork to cart line item: ${bindErr?.message || 'Database update error'}`,
+          },
+          { status: 500 }
+        );
       }
     }
 
@@ -167,6 +221,8 @@ export async function POST(req: NextRequest) {
         mimeType: validation.mimeType,
         sha256: validation.sha256,
         storageKey,
+        scanStatus: 'unscanned',
+        boundToLineItem: Boolean(lineItemId),
       },
       { status: 201 }
     );

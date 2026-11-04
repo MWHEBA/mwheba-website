@@ -565,7 +565,7 @@ export interface ArtworkAsset {
   /**
    * Antivirus and malware content inspection scan status.
    */
-  scanStatus?: ('clean' | 'flagged' | 'unscanned') | null;
+  scanStatus?: ('unscanned' | 'clean' | 'flagged') | null;
   updatedAt: string;
   createdAt: string;
 }

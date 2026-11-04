@@ -1261,6 +1261,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
           cart: cart.id,
           status: 'pending_order',
         },
+        context: { isTrustedUpload: true },
         overrideAccess: true,
       });
 
