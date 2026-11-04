@@ -10,7 +10,11 @@ import configPromise from '@/payload.config';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
-import { submitServiceBrief } from '@/modules/fulfillment/services/fulfillmentService';
+import {
+  submitServiceBrief,
+  transitionJob,
+  approveProof,
+} from '@/modules/fulfillment/services/fulfillmentService';
 import { ServiceBriefForm } from '@/modules/fulfillment/ui/ServiceBriefForm';
 import {
   allowedNext,
@@ -18,6 +22,7 @@ import {
   validateTransition,
 } from '@/modules/fulfillment/logic/stateMachine';
 import { saveArtworkFile, verifyArtworkDownloadToken } from '@/modules/customization/lib/privateStorage';
+import { POST as uploadArtworkRoute } from '@/app/api/customization/upload-artwork/route';
 import { POST as transitionRoute } from '@/app/api/fulfillment/jobs/[id]/transition/route';
 import { POST as artworkLinkRoute } from '@/app/api/fulfillment/jobs/[id]/artwork-link/route';
 import { POST as approveProofRoute } from '@/app/api/orders/[id]/proof/approve/route';
@@ -570,6 +575,74 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
       expect(String(indexes.rows[0]?.indexdef)).toContain('UNIQUE');
       expect((await payload.find({ collection: 'service-briefs', where: { job: { equals: jobId } }, depth: 0 })).totalDocs).toBe(1);
     });
+
+    it('serializes simultaneous operator transitions for the same job, preventing duplicate history and lost updates', async () => {
+      const { orderId, jobs } = await placeOrder({ items: [{ product: flask.id, quantity: 10 }] });
+      const jobId = jobs[0].id;
+      expect((await jobOf(jobId)).status).toBe('queued');
+
+      // Two concurrent operators attempting to move queued -> in_printing at the exact same moment
+      const results = await Promise.allSettled([
+        transitionRoute(asReq(`http://localhost:3000/api/fulfillment/jobs/${jobId}/transition`, opsToken, { to: 'in_printing' }), params(jobId)),
+        transitionRoute(asReq(`http://localhost:3000/api/fulfillment/jobs/${jobId}/transition`, opsToken, { to: 'in_printing' }), params(jobId)),
+      ]);
+
+      const responses = await Promise.all(
+        results.map(async (r) => {
+          if (r.status !== 'fulfilled') throw r.reason;
+          return { status: r.value.status, data: await r.value.json() };
+        })
+      );
+
+      const ok = responses.filter((r) => r.status === 200);
+      const conflict = responses.filter((r) => r.status === 409);
+      expect(ok).toHaveLength(1);
+      expect(conflict).toHaveLength(1);
+      expect(conflict[0].data.error).toContain('INVALID_TRANSITION');
+
+      const job = await jobOf(jobId);
+      expect(job.status).toBe('in_printing');
+      const printingTransitions = (job.statusHistory as any[]).filter((h) => h.to === 'in_printing');
+      expect(printingTransitions).toHaveLength(1);
+      expect(orderId).toBeTruthy();
+    });
+
+    it('serializes simultaneous proof approvals for the same order', async () => {
+      const { orderId, jobs, customerToken } = await placeOrder({
+        items: [{ product: flask.id, quantity: 10, artworkAssetId: String(artworkAsset.id) }],
+      });
+      const jobId = jobs[0].id;
+      expect((await jobOf(jobId)).status).toBe('pending_artwork_approval');
+
+      // Two concurrent customer proof approvals sent simultaneously
+      const results = await Promise.allSettled([
+        approveProofRoute(asReq(`http://localhost:3000/api/orders/${orderId}/proof/approve`, customerToken), params(orderId)),
+        approveProofRoute(asReq(`http://localhost:3000/api/orders/${orderId}/proof/approve`, customerToken), params(orderId)),
+      ]);
+
+      const responses = await Promise.all(
+        results.map(async (r) => {
+          if (r.status !== 'fulfilled') throw r.reason;
+          return { status: r.value.status, data: await r.value.json() };
+        })
+      );
+
+      const ok = responses.filter((r) => r.status === 200);
+      const conflict = responses.filter((r) => r.status === 409);
+      expect(ok).toHaveLength(1);
+      expect(conflict).toHaveLength(1);
+      expect(conflict[0].data.error).toContain('PROOF_NOT_PENDING');
+
+      const updatedOrder: any = await payload.findByID({ collection: 'orders', id: orderId, depth: 0 });
+      expect(updatedOrder.proofStatus).toBe('proof_approved');
+      const approvalAudits = (updatedOrder.auditLog as any[]).filter((a: any) => a.entry.includes('Artwork proof approved'));
+      expect(approvalAudits).toHaveLength(1);
+
+      const job = await jobOf(jobId);
+      expect(job.status).toBe('queued');
+      const queuedTransitions = (job.statusHistory as any[]).filter((h: any) => h.to === 'queued');
+      expect(queuedTransitions).toHaveLength(1);
+    });
   });
 
   // ===========================================================================
@@ -798,6 +871,114 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
         global.document = originalDocument;
         global.fetch = originalFetch;
       }
+    });
+  });
+
+  // ===========================================================================
+  // 9. Full HTTP/Integration Journey: Brief submission with uploaded artwork attachment
+  // ===========================================================================
+  describe('9. Full HTTP intake journey: upload attachment -> submit brief -> creative download', () => {
+    it('executes the full workflow without browser automation: validates ownership, links attachment, and grants creative director download', async () => {
+      // 1. Customer creates an order with a creative service line
+      const { orderId, jobs, customerToken } = await placeOrder({
+        items: [{ product: service.id, quantity: 1 }],
+      });
+      expect(jobs).toHaveLength(1);
+      const serviceJob = jobs[0];
+      expect(serviceJob.status).toBe('pending_brief');
+
+      // 2. Customer uploads a reference attachment (brand guide SVG) via /api/customization/upload-artwork
+      const sampleSvg = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="40" fill="navy"/></svg>';
+      const blob = new Blob([sampleSvg], { type: 'image/svg+xml' });
+      const formData = new FormData();
+      const filename = `brand_guidelines_${Date.now()}.svg`;
+      formData.append('file', blob, filename);
+
+      const uploadReq = new NextRequest('http://localhost:3000/api/customization/upload-artwork', {
+        method: 'POST',
+        headers: {
+          Authorization: `JWT ${customerToken}`,
+        },
+        body: formData,
+      });
+
+      const uploadRes = await uploadArtworkRoute(uploadReq);
+      expect(uploadRes.status).toBe(201);
+      const uploadData = await uploadRes.json();
+      expect(uploadData.success).toBe(true);
+      expect(uploadData.assetId).toBeTruthy();
+      expect(uploadData.scanStatus).toBe('unscanned');
+      const assetId = uploadData.assetId;
+      cleanup.assets.push(assetId);
+
+      // 3. Negative check: Another customer cannot attach this asset to their own brief
+      const otherOrder = await placeOrder({ items: [{ product: service.id, quantity: 1 }] });
+
+      const unownedAttachmentRes = await briefRoute(
+        asReq(`http://localhost:3000/api/orders/${otherOrder.orderId}/brief`, otherOrder.customerToken, {
+          answers: { targetAudience: 'Foreign Audience', brandValues: 'Foreign Values' },
+          attachmentAssetIds: [assetId],
+        }),
+        params(otherOrder.orderId)
+      );
+      expect(unownedAttachmentRes.status).toBe(400);
+      const unownedData = await unownedAttachmentRes.json();
+      expect(unownedData.error).toContain('INVALID_ATTACHMENT');
+
+      // 4. Legitimate owner submits the brief with their uploaded attachment
+      const validBriefRes = await briefRoute(
+        asReq(`http://localhost:3000/api/orders/${orderId}/brief`, customerToken, {
+          answers: {
+            targetAudience: 'Enterprise B2B Procurement Leads',
+            brandValues: 'Minimal, calm, corporate elegance',
+            existingGuidelines: 'Hex and fonts locked per project spec',
+            notes: 'Vector brand guide attached for reference',
+          },
+          attachmentAssetIds: [assetId],
+        }),
+        params(orderId)
+      );
+      expect(validBriefRes.status).toBe(200);
+      const briefData = await validBriefRes.json();
+      expect(briefData.briefId).toBeTruthy();
+      expect(briefData.notification.status).toBe('pending');
+      expect(briefData.notification.delivered).toBe(false);
+
+      // Verify database state: job status is brief_submitted, service_briefs doc has attachmentAssetIds
+      const briefDoc: any = await payload.findByID({ collection: 'service-briefs', id: briefData.briefId, depth: 0 });
+      expect(briefDoc.answers.targetAudience).toBe('Enterprise B2B Procurement Leads');
+      expect(briefDoc.attachmentAssetIds).toContain(assetId);
+
+      const updatedJob = await jobOf(serviceJob.id);
+      expect(updatedJob.status).toBe('brief_submitted');
+
+      // 5. Creative director requests signed link to the attachment
+      const linkRes = await briefAttachmentLinkRoute(
+        asReq(`http://localhost:3000/api/fulfillment/briefs/${briefData.briefId}/attachments/${assetId}/link`, creativeToken),
+        { params: Promise.resolve({ id: String(briefData.briefId), assetId: String(assetId) }) }
+      );
+      expect(linkRes.status).toBe(200);
+      const { url } = await linkRes.json();
+      expect(url).toContain('/download?token=');
+
+      // 6. Download file using the signed url and verify content integrity
+      const fileRes = await artworkDownloadRoute(new NextRequest(`http://localhost:3000${url}`), params(assetId));
+      expect(fileRes.status).toBe(200);
+      const downloadedBytes = Buffer.from(await fileRes.arrayBuffer()).toString();
+      expect(downloadedBytes).toBe(sampleSvg);
+
+      // 7. Operations staff & finance staff are denied access to the creative brief attachment
+      const opsDenied = await briefAttachmentLinkRoute(
+        asReq(`http://localhost:3000/api/fulfillment/briefs/${briefData.briefId}/attachments/${assetId}/link`, opsToken),
+        { params: Promise.resolve({ id: String(briefData.briefId), assetId: String(assetId) }) }
+      );
+      expect(opsDenied.status).toBe(403);
+
+      const financeDenied = await briefAttachmentLinkRoute(
+        asReq(`http://localhost:3000/api/fulfillment/briefs/${briefData.briefId}/attachments/${assetId}/link`, financeToken),
+        { params: Promise.resolve({ id: String(briefData.briefId), assetId: String(assetId) }) }
+      );
+      expect(financeDenied.status).toBe(403);
     });
   });
 });

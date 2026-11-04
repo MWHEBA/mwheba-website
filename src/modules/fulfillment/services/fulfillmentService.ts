@@ -65,12 +65,24 @@ const appendHistory = (job: any, entry: Record<string, unknown>) => [
   { ...entry, at: new Date().toISOString() },
 ];
 
-/** Row lock on the job inside the active transaction (serializes concurrent customer submissions). */
+/** Row lock on the job inside the active transaction (serializes concurrent customer submissions and status transitions). */
 async function lockJobRow(payload: Payload, transactionID: unknown, jobId: number | string) {
+  const numericId = Number(jobId);
+  if (!Number.isFinite(numericId)) return;
   const session = (payload.db as any)?.sessions?.[String(transactionID)];
   const executor = session?.db;
-  if (!executor || typeof executor.execute !== 'function') return; // unique index remains the backstop
-  await executor.execute(sql`SELECT "id" FROM "fulfillment_jobs" WHERE "id" = ${Number(jobId)} FOR UPDATE`);
+  if (!executor || typeof executor.execute !== 'function') return;
+  await executor.execute(sql`SELECT "id" FROM "fulfillment_jobs" WHERE "id" = ${numericId} FOR UPDATE`);
+}
+
+/** Row lock on the order inside the active transaction (serializes concurrent customer proof approvals). */
+async function lockOrderRow(payload: Payload, transactionID: unknown, orderId: number | string) {
+  const numericId = Number(orderId);
+  if (!Number.isFinite(numericId)) return;
+  const session = (payload.db as any)?.sessions?.[String(transactionID)];
+  const executor = session?.db;
+  if (!executor || typeof executor.execute !== 'function') return;
+  await executor.execute(sql`SELECT "id" FROM "orders" WHERE "id" = ${numericId} FOR UPDATE`);
 }
 
 function isUniqueViolation(err: any): boolean {
@@ -150,15 +162,23 @@ export async function transitionJob(
 ) {
   if (!params.user) fail('UNAUTHENTICATED', 'Authentication is required.', 401);
 
-  const job: any = await payload
-    .findByID({ collection: 'fulfillment-jobs', id: params.jobId, depth: 0 })
-    .catch(() => null);
-  if (!job) fail('JOB_NOT_FOUND', 'Fulfillment job not found.', 404);
-  requireStaffForTrack(params.user, job.track);
-
   const tx = await beginTx(payload);
   const txReq: any = { payload, transactionID: tx.transactionID };
   try {
+    // Serialize concurrent transitions for this job by locking its row in PostgreSQL
+    await lockJobRow(payload, tx.transactionID, params.jobId);
+
+    // Re-read job state inside the locked transaction
+    const job: any = await payload
+      .findByID({ collection: 'fulfillment-jobs', id: params.jobId, depth: 0, req: txReq })
+      .catch(() => null);
+    if (!job) fail('JOB_NOT_FOUND', 'Fulfillment job not found.', 404);
+    requireStaffForTrack(params.user, job.track);
+
+    if (job.status === params.to) {
+      fail('INVALID_TRANSITION', `Job is already in status '${params.to}'.`, 409);
+    }
+
     let updated: any;
     try {
       updated = await payload.update({
@@ -202,20 +222,24 @@ export async function transitionJob(
 export async function approveProof(payload: Payload, params: { orderId: number | string; user: Actor }) {
   if (!params.user) fail('UNAUTHENTICATED', 'Authentication is required.', 401);
 
-  const order: any = await payload
-    .findByID({ collection: 'orders', id: params.orderId, depth: 0 })
-    .catch(() => null);
-  if (!order || String(idOf(order.customer)) !== String(params.user!.id)) {
-    // Do not reveal whether the order exists
-    fail('ORDER_NOT_FOUND', 'Order not found.', 404);
-  }
-  if (order.proofStatus !== 'proof_pending') {
-    fail('PROOF_NOT_PENDING', `Order proof status is '${order.proofStatus}', nothing to approve.`, 409);
-  }
-
   const tx = await beginTx(payload);
   const txReq: any = { payload, transactionID: tx.transactionID };
   try {
+    // Serialize concurrent proof approvals for this order by locking its row in PostgreSQL
+    await lockOrderRow(payload, tx.transactionID, params.orderId);
+
+    // Re-read order state inside the locked transaction
+    const order: any = await payload
+      .findByID({ collection: 'orders', id: params.orderId, depth: 0, req: txReq })
+      .catch(() => null);
+    if (!order || String(idOf(order.customer)) !== String(params.user!.id)) {
+      // Do not reveal whether the order exists
+      fail('ORDER_NOT_FOUND', 'Order not found.', 404);
+    }
+    if (order.proofStatus !== 'proof_pending') {
+      fail('PROOF_NOT_PENDING', `Order proof status is '${order.proofStatus}', nothing to approve.`, 409);
+    }
+
     const nowIso = new Date().toISOString();
     await payload.update({
       collection: 'orders',
