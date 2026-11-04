@@ -13,6 +13,8 @@ import { PaymentEvents } from './modules/payments/collections/PaymentEvents';
 import { PaymentAttempts } from './modules/payments/collections/PaymentAttempts';
 import { PaymentCollections } from './modules/payments/collections/PaymentCollections';
 import { CourierRemittances } from './modules/payments/collections/CourierRemittances';
+import { FulfillmentJobs } from './modules/fulfillment/collections/FulfillmentJobs';
+import { ServiceBriefs } from './modules/fulfillment/collections/ServiceBriefs';
 import { Categories } from './modules/catalog/collections/Categories';
 import { productsCollectionOverride } from './modules/catalog/collections/Products';
 import { Pages } from './modules/content/collections/Pages';
@@ -77,6 +79,8 @@ export default buildConfig({
     PaymentAttempts,
     PaymentCollections,
     CourierRemittances,
+    FulfillmentJobs,
+    ServiceBriefs,
   ],
   localization: {
     locales: [
@@ -527,16 +531,36 @@ export default buildConfig({
                     }
 
                     // DEFENSE 3: PRE-PRODUCTION PROOF APPROVAL GATE (D-023)
-                    // If order requires customer proof approval, fulfillment cannot jump to production, shipping or delivery
+                    // Proof approval is performed ONLY by the customer's own approval engine; an operator cannot
+                    // approve in the same update that advances fulfillment, nor set proofStatus directly.
+                    const approvalEngine = Boolean(context?.isProofApprovalEngine || req?.context?.isProofApprovalEngine);
+                    if (data.proofStatus !== undefined && data.proofStatus !== originalDoc.proofStatus && !approvalEngine) {
+                      throw new Error(
+                        'PROOF_STATUS_ENGINE_ONLY: proofStatus can only change through the customer proof approval flow.'
+                      );
+                    }
+                    if (data.proofApprovedAt !== undefined && !approvalEngine) {
+                      data.proofApprovedAt = originalDoc.proofApprovedAt;
+                    }
                     if (originalDoc.proofStatus === 'proof_pending') {
                       const targetFulfillment = data.fulfillmentStatus;
                       if (targetFulfillment && ['in_production', 'ready_for_pickup', 'shipped', 'delivered'].includes(targetFulfillment)) {
-                        if (data.proofStatus !== 'proof_approved') {
-                          throw new Error(
-                            `PROOF_NOT_APPROVED: Cannot transition order to fulfillment status '${targetFulfillment}' while proofStatus is 'proof_pending'. Client proof must be approved first.`
-                          );
-                        }
+                        throw new Error(
+                          `PROOF_NOT_APPROVED: Cannot transition order to fulfillment status '${targetFulfillment}' while proofStatus is 'proof_pending'. Client proof must be approved first.`
+                        );
                       }
+                    }
+
+                    // Order-level production/delivery statuses are derived by the fulfillment engine from line jobs.
+                    if (
+                      data.fulfillmentStatus !== undefined &&
+                      data.fulfillmentStatus !== originalDoc.fulfillmentStatus &&
+                      ['in_production', 'ready_for_pickup', 'shipped', 'delivered'].includes(data.fulfillmentStatus) &&
+                      !(context?.fulfillmentEngine || req?.context?.fulfillmentEngine)
+                    ) {
+                      throw new Error(
+                        `FULFILLMENT_STATUS_ENGINE_ONLY: Order fulfillment status '${data.fulfillmentStatus}' is derived from line-level fulfillment jobs and cannot be set directly.`
+                      );
                     }
 
                     // DEFENSE 4: REJECT PAYMENT ON CANCELLED OR REFUSED ORDERS

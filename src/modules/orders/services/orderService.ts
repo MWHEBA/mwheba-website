@@ -7,6 +7,7 @@ import type { Payload } from 'payload';
 import { validateCartMoq } from '../../cart-checkout/logic/moqEngine';
 import { withCartLock } from '../../cart-checkout/services/cartStorage';
 import { resolveDeliveryTariff } from './deliveryTariff';
+import { createJobsForOrder } from '@/modules/fulfillment/services/fulfillmentService';
 import { customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
 
 export interface CreateOrderCustomerInput {
@@ -549,6 +550,9 @@ export async function createOrderFromCart(
         },
         req: txReq,
       });
+
+      // 14b. Create per-line fulfillment jobs (physical vs service tracks) inside the same transaction
+      await createJobsForOrder(payload, order, txReq);
 
       // 15. Commit PostgreSQL transaction
       if (typeof (payload.db as any)?.commitTransaction === 'function') {

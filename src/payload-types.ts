@@ -86,6 +86,8 @@ export interface Config {
     'payment-attempts': PaymentAttempt;
     'payment-collections': PaymentCollection;
     'courier-remittances': CourierRemittance;
+    'fulfillment-jobs': FulfillmentJob;
+    'service-briefs': ServiceBrief;
     addresses: Address;
     variants: Variant;
     variantTypes: VariantType;
@@ -122,6 +124,8 @@ export interface Config {
     'payment-attempts': PaymentAttemptsSelect<false> | PaymentAttemptsSelect<true>;
     'payment-collections': PaymentCollectionsSelect<false> | PaymentCollectionsSelect<true>;
     'courier-remittances': CourierRemittancesSelect<false> | CourierRemittancesSelect<true>;
+    'fulfillment-jobs': FulfillmentJobsSelect<false> | FulfillmentJobsSelect<true>;
+    'service-briefs': ServiceBriefsSelect<false> | ServiceBriefsSelect<true>;
     addresses: AddressesSelect<false> | AddressesSelect<true>;
     variants: VariantsSelect<false> | VariantsSelect<true>;
     variantTypes: VariantTypesSelect<false> | VariantTypesSelect<true>;
@@ -1113,6 +1117,96 @@ export interface CourierRemittance {
   createdAt: string;
 }
 /**
+ * Per-line fulfillment tracking: factory production for physical goods, creative intake for services.
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "fulfillment-jobs".
+ */
+export interface FulfillmentJob {
+  id: number;
+  order: number | Order;
+  lineIndex: number;
+  track: 'physical' | 'service';
+  status:
+    | 'pending_artwork_approval'
+    | 'queued'
+    | 'in_printing'
+    | 'quality_check'
+    | 'ready_for_pickup'
+    | 'shipped'
+    | 'delivered'
+    | 'pending_brief'
+    | 'brief_submitted'
+    | 'in_progress'
+    | 'review'
+    | 'completed';
+  customized?: boolean | null;
+  /**
+   * Artwork asset reference (private file; use the signed link endpoint).
+   */
+  artworkAssetId?: string | null;
+  productTitle?: string | null;
+  quantity?: number | null;
+  printingNotes?: string | null;
+  /**
+   * Append-only transition log (server-recorded).
+   */
+  statusHistory?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * Creative brief intake for fixed-price service packages (D-003).
+ *
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "service-briefs".
+ */
+export interface ServiceBrief {
+  id: number;
+  order: number | Order;
+  job: number | FulfillmentJob;
+  customer: number | User;
+  /**
+   * Agency questions: targetAudience, brandValues, existingGuidelines, notes.
+   */
+  answers:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  /**
+   * Reference material stored as private artwork-assets (never public).
+   */
+  attachmentAssetIds?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  submittedAt: string;
+  /**
+   * Creative-director notification outbox state. Delivery transport is wired in a later phase.
+   */
+  notificationStatus?: ('pending' | 'sent' | 'failed') | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "addresses".
  */
@@ -1252,6 +1346,14 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'courier-remittances';
         value: number | CourierRemittance;
+      } | null)
+    | ({
+        relationTo: 'fulfillment-jobs';
+        value: number | FulfillmentJob;
+      } | null)
+    | ({
+        relationTo: 'service-briefs';
+        value: number | ServiceBrief;
       } | null)
     | ({
         relationTo: 'addresses';
@@ -1777,6 +1879,39 @@ export interface CourierRemittancesSelect<T extends boolean = true> {
   varianceApproved?: T;
   varianceNotes?: T;
   reconciledBy?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "fulfillment-jobs_select".
+ */
+export interface FulfillmentJobsSelect<T extends boolean = true> {
+  order?: T;
+  lineIndex?: T;
+  track?: T;
+  status?: T;
+  customized?: T;
+  artworkAssetId?: T;
+  productTitle?: T;
+  quantity?: T;
+  printingNotes?: T;
+  statusHistory?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "service-briefs_select".
+ */
+export interface ServiceBriefsSelect<T extends boolean = true> {
+  order?: T;
+  job?: T;
+  customer?: T;
+  answers?: T;
+  attachmentAssetIds?: T;
+  submittedAt?: T;
+  notificationStatus?: T;
   updatedAt?: T;
   createdAt?: T;
 }
