@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
-import { sql } from '@payloadcms/db-postgres';
 import configPromise from '@/payload.config';
 import { readCartId, signCartId } from '@/modules/cart-checkout/logic/cartSession';
 import {
@@ -42,38 +41,6 @@ async function resolveCart(req: NextRequest, payload: any) {
     });
     if (carts.docs?.[0]) {
       return { cart: carts.docs[0], isNew: false };
-    }
-
-    // Fallback: check if guestSecret is JSON or contains operationKey in appliedOperations
-    let lookupKeys: string[] = [guestSecret];
-    try {
-      if (guestSecret.startsWith('{')) {
-        const parsed = JSON.parse(guestSecret);
-        if (parsed.lastOpKey) lookupKeys.push(parsed.lastOpKey);
-        if (Array.isArray(parsed.appliedOps)) lookupKeys.push(...parsed.appliedOps);
-      }
-    } catch {}
-
-    const db = (payload.db as any).drizzle;
-    if (db) {
-      for (const key of lookupKeys) {
-        try {
-          const found = await db.execute(sql`
-            SELECT id FROM "carts"
-            WHERE "applied_operations"::text LIKE ${'%' + key + '%'}
-               OR "secret" = ${key}
-            LIMIT 1;
-          `);
-          if (found.rows?.[0]?.id) {
-            const doc = await payload.findByID({
-              collection: 'carts',
-              id: found.rows[0].id,
-              depth: 0,
-            });
-            if (doc) return { cart: doc, isNew: false };
-          }
-        } catch {}
-      }
     }
   }
 
@@ -295,7 +262,7 @@ export async function GET(req: NextRequest) {
     let cartId: number | null = null;
 
     if (guestSecret) {
-      // Find guest cart by native Payload Ecommerce secret
+      // Find guest cart strictly by native Payload Ecommerce secret
       const carts = await payload.find({
         collection: 'carts',
         where: { secret: { equals: guestSecret } },
@@ -304,34 +271,6 @@ export async function GET(req: NextRequest) {
       });
       if (carts.docs?.[0]) {
         cartId = carts.docs[0].id;
-      } else {
-        // Fallback: check if guestSecret is JSON or contains operationKey in appliedOperations
-        let lookupKeys: string[] = [guestSecret];
-        try {
-          if (guestSecret.startsWith('{')) {
-            const parsed = JSON.parse(guestSecret);
-            if (parsed.lastOpKey) lookupKeys.push(parsed.lastOpKey);
-            if (Array.isArray(parsed.appliedOps)) lookupKeys.push(...parsed.appliedOps);
-          }
-        } catch {}
-
-        const db = (payload.db as any).drizzle;
-        if (db) {
-          for (const key of lookupKeys) {
-            try {
-              const found = await db.execute(sql`
-                SELECT id FROM "carts"
-                WHERE "applied_operations"::text LIKE ${'%' + key + '%'}
-                   OR "secret" = ${key}
-                LIMIT 1;
-              `);
-              if (found.rows?.[0]?.id) {
-                cartId = found.rows[0].id;
-                break;
-              }
-            } catch {}
-          }
-        }
       }
     }
 
