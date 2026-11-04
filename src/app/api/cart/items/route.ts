@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
+import { sql } from '@payloadcms/db-postgres';
 import configPromise from '@/payload.config';
 import { readCartId, signCartId } from '@/modules/cart-checkout/logic/cartSession';
 import {
@@ -13,9 +14,9 @@ import {
 } from '@/modules/cart-checkout/services/cartStorage';
 
 /**
- * Helper to resolve cart ID from signed session cookie or authenticated user.
+ * Helper to resolve cart ID from signed session cookie, authenticated user, or retried initial mutation.
  */
-async function resolveCart(req: NextRequest, payload: any) {
+async function resolveCart(req: NextRequest, payload: any, operationKey?: string) {
   const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
   const sessionCartId = readCartId(cookieVal);
 
@@ -25,7 +26,7 @@ async function resolveCart(req: NextRequest, payload: any) {
       id: sessionCartId,
       depth: 0,
     });
-    if (existing) {
+    if (existing && !existing.purchasedAt) {
       return { cart: existing, isNew: false };
     }
   }
@@ -39,7 +40,7 @@ async function resolveCart(req: NextRequest, payload: any) {
       limit: 1,
       depth: 0,
     });
-    if (carts.docs?.[0]) {
+    if (carts.docs?.[0] && !carts.docs[0].purchasedAt) {
       return { cart: carts.docs[0], isNew: false };
     }
   }
@@ -54,12 +55,44 @@ async function resolveCart(req: NextRequest, payload: any) {
         limit: 1,
         depth: 0,
       });
-      if (userCarts.docs?.[0]) {
+      if (userCarts.docs?.[0] && !userCarts.docs[0].purchasedAt) {
         return { cart: userCarts.docs[0], isNew: false };
       }
     }
   } catch {
     // Guest flow
+  }
+
+  // IDEMPOTENT FIRST ADD RESILIENCE:
+  // When a guest adds an item without an existing cookie, the server creates a cart and sends the cookie in the response.
+  // If that first response is dropped due to a network interruption, the client retries with the EXACT SAME operationKey
+  // but still has NO cookie. Here, we locate the cart already created and recorded for that operationKey
+  // rather than creating an unwanted second orphaned cart.
+  if (operationKey && typeof operationKey === 'string' && operationKey.trim()) {
+    const db = (payload.db as any).drizzle;
+    if (db) {
+      try {
+        const existingWithOp = await db.execute(sql`
+          SELECT id FROM "carts"
+          WHERE "applied_operations" @> jsonb_build_array(${operationKey.trim()}::text)
+            AND "purchased_at" IS NULL
+          LIMIT 1;
+        `);
+        if (existingWithOp.rows?.[0]?.id) {
+          const foundCart = await payload.findByID({
+            collection: 'carts',
+            id: existingWithOp.rows[0].id,
+            depth: 0,
+          });
+          if (foundCart && !foundCart.purchasedAt) {
+            // isNew: true re-issues the Set-Cookie header so the client receives the cookie lost on attempt 1
+            return { cart: foundCart, isNew: true };
+          }
+        }
+      } catch (err: any) {
+        // Log query error if any
+      }
+    }
   }
 
   // Initialize new guest cart with native Payload Ecommerce secret
@@ -106,7 +139,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { cart, isNew } = await resolveCart(req, payload);
+    const { cart, isNew } = await resolveCart(req, payload, operationKey.trim());
 
     const summary = await addItemToCart(payload, cart.id, {
       productId,

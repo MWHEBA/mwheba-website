@@ -945,6 +945,174 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       }
     });
 
+    it('handles dropped response on first guest add without cookie: re-links retried attempt to the SAME cart, ensuring strictly ONE cart and ONE line item in PostgreSQL', async () => {
+      (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+      const window = new Window();
+      const document = window.document;
+      const originalWindow = global.window;
+      const originalDocument = global.document;
+      const originalFetch = global.fetch;
+
+      global.window = window as any;
+      global.document = document as any;
+
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container as any);
+
+      // Track how many carts existed in PostgreSQL before this test
+      const db = (payload.db as any).drizzle;
+      const preCheck = await db.execute(sql`SELECT count(*)::int as count FROM "carts";`);
+      const initialCartsCount = preCheck.rows[0].count;
+
+      // Simulate a guest with NO initial cookie who experiences a network interruption on first POST
+      let attemptCount = 0;
+      let capturedFirstOpKey = '';
+      let serverCreatedCartId: number | null = null;
+      let simulatedClientCookie = '';
+
+      global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
+        if (url === '/api/cart/items' && init?.method === 'POST') {
+          attemptCount++;
+          const body = JSON.parse(init.body);
+          capturedFirstOpKey = body.operationKey;
+
+          // Request 1: has NO cookie header
+          // Request 2 (retry): also has NO cookie header (because client never received attempt 1's Set-Cookie)
+          const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+          };
+          if (simulatedClientCookie) {
+            headers.Cookie = simulatedClientCookie;
+          }
+
+          const req = new NextRequest('http://localhost:3000/api/cart/items', {
+            method: 'POST',
+            headers,
+            body: init.body,
+          });
+
+          const res = await cartItemsPostRoute(req);
+          const clonedRes = res.clone();
+          const json = await clonedRes.json();
+          if (json.cartId) {
+            serverCreatedCartId = json.cartId;
+            createdCartIds.push(json.cartId);
+          }
+
+          if (attemptCount === 1) {
+            // First attempt: Server creates cart and sets cookie header,
+            // BUT network drops on the wire before client receives response!
+            const netErr: any = new Error('fetch failed: connection terminated by peer');
+            netErr.name = 'TypeError';
+            throw netErr;
+          }
+
+          // Second attempt: Network succeeds! Client finally gets response and stores the cookie
+          const cookieHeader = res.headers.get('set-cookie');
+          if (cookieHeader) {
+            const match = cookieHeader.match(/mwheba_cart=([^;]+)/);
+            if (match) simulatedClientCookie = `mwheba_cart=${match[1]}`;
+          }
+          return res;
+        }
+
+        if (url === '/api/cart/items' && (!init || init.method === 'GET')) {
+          const req = new NextRequest('http://localhost:3000/api/cart/items', {
+            method: 'GET',
+            headers: simulatedClientCookie ? { Cookie: simulatedClientCookie } : {},
+          });
+          return await cartItemsGetRoute(req);
+        }
+
+        return new Response('Not found', { status: 404 });
+      });
+
+      function FirstAddTestHarness() {
+        const { items, totalCount, addItem, isCartOpen, cartId } = useCart();
+        return React.createElement(
+          'div',
+          null,
+          React.createElement(
+            'button',
+            {
+              id: 'btn-first-add',
+              onClick: async () => {
+                await addItem({ productId: physicalProductA.id, quantity: 10 });
+              },
+            },
+            'First Add'
+          ),
+          React.createElement('div', { id: 'dom-items-count' }, String(items.length)),
+          React.createElement('div', { id: 'dom-total-qty' }, String(totalCount)),
+          React.createElement('div', { id: 'dom-cart-id' }, String(cartId || '')),
+          React.createElement('div', { id: 'dom-drawer-open' }, String(isCartOpen))
+        );
+      }
+
+      try {
+        await act(async () => {
+          root.render(React.createElement(CartProvider, null, React.createElement(FirstAddTestHarness)));
+          await new Promise((resolve) => setTimeout(resolve, 30));
+        });
+
+        // Trigger first add: this will fail on attempt 1, and executeWithOperationRetry will auto-retry
+        const btnFirstAdd = container.querySelector('#btn-first-add') as any;
+        await act(async () => {
+          btnFirstAdd.click();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        });
+
+        // Assert that exactly 2 network attempts were made (1 failure + 1 retry)
+        expect(attemptCount).toBe(2);
+        expect(capturedFirstOpKey).toMatch(/^op_add_/);
+
+        // Assert UI state updated correctly after retry
+        const domItemsCount = container.querySelector('#dom-items-count')!;
+        const domTotalQty = container.querySelector('#dom-total-qty')!;
+        const domCartId = container.querySelector('#dom-cart-id')!;
+        const domDrawerOpen = container.querySelector('#dom-drawer-open')!;
+
+        expect(domItemsCount.textContent).toBe('1');
+        expect(domTotalQty.textContent).toBe('10');
+        expect(domDrawerOpen.textContent).toBe('true');
+        expect(domCartId.textContent).toBe(String(serverCreatedCartId));
+
+        // CRITICAL DATABASE INTEGRITY INVARIANTS:
+        // 1. Total carts in PostgreSQL must have increased by EXACTLY 1 (initial + 1, NOT initial + 2!)
+        const postCheck = await db.execute(sql`SELECT count(*)::int as count FROM "carts";`);
+        expect(postCheck.rows[0].count).toBe(initialCartsCount + 1);
+
+        // 2. Query the created cart directly in PostgreSQL:
+        // Must have exactly ONE line item with quantity 10 (NOT duplicated to 20!)
+        const dbCart = await payload.findByID({
+          collection: 'carts',
+          id: serverCreatedCartId!,
+          depth: 0,
+        });
+        expect(dbCart).toBeDefined();
+        expect(dbCart.items?.length).toBe(1);
+        expect(dbCart.items?.[0].quantity).toBe(10);
+        expect(dbCart.appliedOperations).toContain(capturedFirstOpKey);
+
+        // 3. Exactly ONE cart in the entire database matches this operationKey
+        const opCheck = await db.execute(sql`
+          SELECT id FROM "carts"
+          WHERE "applied_operations" @> jsonb_build_array(${capturedFirstOpKey}::text);
+        `);
+        expect(opCheck.rows.length).toBe(1);
+        expect(opCheck.rows[0].id).toBe(serverCreatedCartId);
+      } finally {
+        await act(async () => {
+          root.unmount();
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+        global.window = originalWindow;
+        global.document = originalDocument;
+        global.fetch = originalFetch;
+      }
+    });
+
     it('drives cart mutation via executeWithOperationRetry and reuses key on retry to prevent duplicates', async () => {
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
@@ -1126,24 +1294,26 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       expect(dataHeader.cartId).toBeUndefined();
       expect(dataHeader.items.length).toBe(0);
 
-      // 4. Attacker attempts to mutate cart using victim's operationKey without cookie
-      const attackerReqPost = new NextRequest('http://localhost:3000/api/cart/items', {
+      // 4. Re-sending POST with victimOpKey is strictly idempotent: it re-links to the transaction but CANNOT alter or inflate quantities
+      const replayReqPost = new NextRequest('http://localhost:3000/api/cart/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productId: physicalProductA.id,
-          quantity: 5,
+          quantity: 50, // attempts to add 50 more units with the reused opKey
           operationKey: victimOpKey,
         }),
       });
-      const resPost = await cartItemsPostRoute(attackerReqPost);
+      const resPost = await cartItemsPostRoute(replayReqPost);
+      expect(resPost.ok).toBe(true);
       const dataPost = await resPost.json();
-      // A new distinct cart is created; victim's cart is strictly NOT touched or disclosed
-      expect(dataPost.cartId).not.toBe(victimCart.id);
-      createdCartIds.push(dataPost.cartId);
+      expect(dataPost.cartId).toBe(victimCart.id);
+      // Idempotency strictly prevented inflating the quantity: remains 25, NOT 25 + 50!
+      expect(dataPost.summary.totalItemsCount).toBe(25);
 
       const unchangedVictim = await getCartSummary(payload, victimCart.id);
       expect(unchangedVictim.totalItemsCount).toBe(25);
+      expect(unchangedVictim.items[0].quantity).toBe(25);
     });
 
     it('proves legitimate cart access is strictly guarded by verified session cookie or native hex secret', async () => {
