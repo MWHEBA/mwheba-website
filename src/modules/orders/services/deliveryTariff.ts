@@ -36,32 +36,49 @@ export const PROVISIONAL_DELIVERY_TARIFFS = {
 
 /**
  * Loads the active runtime operational settings from the Payload CommerceSettings global.
- * Falls back to provisional safe defaults if the global is uninitialized.
+ * Fails closed if the database throws an error, preventing unintended fallback tariffs on real orders.
  */
-export async function getCommerceSettings(payload: Payload): Promise<CommerceSettingsData> {
+export async function getCommerceSettings(
+  payload: Payload,
+  options?: { allowFallbackIfUninitialized?: boolean }
+): Promise<CommerceSettingsData> {
   try {
     const settings = await payload.findGlobal({
       slug: 'commerce-settings',
       depth: 0,
     });
-    if (settings) {
+    if (settings && typeof settings === 'object') {
       return settings as unknown as CommerceSettingsData;
     }
-  } catch {
-    // Database or global uninitialized; use safe fallback
+  } catch (err: any) {
+    if (!options?.allowFallbackIfUninitialized) {
+      const error = new Error(
+        `COMMERCE_SETTINGS_UNAVAILABLE: Failed to read operational commerce settings from database: ${err?.message || err}. Calculation aborted to prevent unintended fallback tariffs.`
+      );
+      (error as any).statusCode = 500;
+      throw error;
+    }
   }
 
-  return {
-    tariffStatus: 'provisional',
-    cairoAndGizaFee: PROVISIONAL_DELIVERY_TARIFFS.cairoAndGiza,
-    alexandriaFee: PROVISIONAL_DELIVERY_TARIFFS.alexandria,
-    otherGovernoratesFee: PROVISIONAL_DELIVERY_TARIFFS.otherGovernorates,
-    officePickupFee: PROVISIONAL_DELIVERY_TARIFFS.officePickupDefault,
-    standardFallbackFee: PROVISIONAL_DELIVERY_TARIFFS.standardFallback,
-    productionPolicy: 'allow_immediate_production',
-    emailDispatchMode: 'deferred_review',
-    changeLog: [],
-  };
+  if (options?.allowFallbackIfUninitialized) {
+    return {
+      tariffStatus: 'provisional',
+      cairoAndGizaFee: PROVISIONAL_DELIVERY_TARIFFS.cairoAndGiza,
+      alexandriaFee: PROVISIONAL_DELIVERY_TARIFFS.alexandria,
+      otherGovernoratesFee: PROVISIONAL_DELIVERY_TARIFFS.otherGovernorates,
+      officePickupFee: PROVISIONAL_DELIVERY_TARIFFS.officePickupDefault,
+      standardFallbackFee: PROVISIONAL_DELIVERY_TARIFFS.standardFallback,
+      productionPolicy: 'allow_immediate_production',
+      emailDispatchMode: 'deferred_review',
+      changeLog: [],
+    };
+  }
+
+  const error = new Error(
+    'COMMERCE_SETTINGS_UNINITIALIZED: Operational commerce settings have not been initialized. Calculation aborted to prevent unintended fallback tariffs.'
+  );
+  (error as any).statusCode = 500;
+  throw error;
 }
 
 /**

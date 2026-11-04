@@ -728,7 +728,19 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
 
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                 <span>{isArabic ? 'رسوم الشحن والتوصيل:' : 'Delivery & Logistics:'}</span>
-                <span>{!quoteReady ? (isArabic ? 'جاري الحساب من الخادم...' : 'Calculating from server...') : shippingFee === 0 ? (isArabic ? 'مجاني (استلام مقر)' : 'Free (Pickup)') : `${shippingFee} ${isArabic ? 'ج.م (تقديري مؤقت D-015)' : 'EGP (provisional D-015)'}`}</span>
+                <span>
+                  {!quoteReady
+                    ? isArabic
+                      ? 'جاري الحساب من الخادم...'
+                      : 'Calculating from server...'
+                    : shippingFee === 0
+                      ? isArabic
+                        ? 'مجاني (استلام مقر)'
+                        : 'Free (Pickup)'
+                      : quote?.isProvisional
+                        ? `${shippingFee} ${isArabic ? 'ج.م (تقديري مؤقت D-015)' : 'EGP (provisional D-015)'}`
+                        : `${shippingFee} ${isArabic ? 'ج.م' : 'EGP'}`}
+                </span>
               </div>
 
               <div
@@ -743,7 +755,15 @@ export function CheckoutView({ locale }: CheckoutViewProps) {
                   marginTop: '0.5rem',
                 }}
               >
-                <span>{isArabic ? 'الإجمالي المقدّر (الشحن مؤقت حتى اعتماد D-015):' : 'Estimated Total (shipping provisional per D-015):'}</span>
+                <span>
+                  {quote?.isProvisional
+                    ? isArabic
+                      ? 'الإجمالي المقدّر (الشحن مؤقت حتى اعتماد D-015):'
+                      : 'Estimated Total (shipping provisional per D-015):'
+                    : isArabic
+                      ? 'الإجمالي النهائي:'
+                      : 'Final Grand Total:'}
+                </span>
                 <span>{quote ? quote.grandTotal.toLocaleString() : '—'} {isArabic ? 'ج.م' : 'EGP'}</span>
               </div>
             </div>

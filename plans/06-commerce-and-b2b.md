@@ -204,6 +204,37 @@ Crucially, **cart mutations must remain flexible**: buyers can add items in any 
 
 ---
 
+### Ticket B2B-06: Runtime Operational Settings & Delivery Tariff Schedule
+- **ID & Title:** B2B-06: Runtime Operational Settings & Delivery Tariff Schedule
+- **Status:** COMPLETED & VERIFIED (2026-11-04)
+- **Business Outcome:** Allow super administrators to manage delivery tariffs (D-015), pre-production payment clearance policies, and notification dispatch modes at runtime via Payload admin, with immutable order snapshots protecting historical orders from posthumous rate changes.
+- **Dependencies:** B2B-04, B2B-05.
+- **Scope:**
+  - `CommerceSettings` Global in Payload CMS:
+    - Delivery Tariff Schedule: `tariffStatus` (`provisional` vs `owner_approved`), rates for Cairo/Giza, Alexandria, other governorates, office pickup, and standard fallback.
+    - Production Policy: `productionPolicy` (`require_payment_clearance` vs `allow_immediate_production`).
+    - Email Dispatch Settings: `emailDispatchMode` (`deferred_review` active; `live_smtp` explicitly disabled pending mail server configuration).
+    - Audit Trail: Automatic append-only `changeLog` tracking user ID, timestamp, and field deltas.
+    - RBAC: Read allowed for `super_admin`, `finance`, `operations`; updates restricted strictly to `super_admin`.
+  - Order Snapshot Immutability:
+    - Snapshot `appliedTariff` and `appliedProductionPolicy` on every order at placement. Historical orders never alter when settings change.
+  - Fail-safe Resolution:
+    - `getCommerceSettings` fails closed on database read errors, preventing unintended default rates on real orders.
+- **Out of Scope:** Custom negotiated pricing or automated PDF customer invoicing (invoicing is omitted per Decision D-016).
+- **Implementation Approach:** Payload Global with PostgreSQL table `commerce_settings` and `orders` snapshot fields.
+- **Files/Modules Impacted:** `src/modules/orders/globals/CommerceSettings.ts`, `src/modules/orders/services/deliveryTariff.ts`, `src/modules/orders/services/orderService.ts`.
+- **Database Changes:** Table `commerce_settings` and columns `applied_tariff`, `applied_production_policy` on `orders`.
+- **Acceptance Criteria:**
+  - Changing tariff rates dynamically updates checkout quotes immediately.
+  - Existing orders retain their exact frozen shipping fees and totals.
+  - Setting policy to `require_payment_clearance` blocks unpaid bank transfer orders from entering production (`in_printing`) with 403.
+- **Test Cases:** 7 automated tests in `tests/b2bCommerceSettingsAndPricing.test.ts`.
+- **Estimate & Risk:** 1.5 days. Low risk.
+- **Rollback:** Revert `commerce_settings` table and global.
+- **Owner Approval Required:** No.
+
+---
+
 ## 3. Risks & Mitigation
 - **Risk:** Large vector artwork uploads timing out over slow mobile connections.  
   *Mitigation:* Use bounded streaming uploads with progress indicators and cPanel request-size/time limits verified in staging.

@@ -9,6 +9,7 @@ import { withCartLock } from '../../cart-checkout/services/cartStorage';
 import { resolveDeliveryTariff, getCommerceSettings } from './deliveryTariff';
 import { createJobsForOrder } from '@/modules/fulfillment/services/fulfillmentService';
 import { customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
+import { validateCodEligibility } from '@/modules/payments/services/codEngine';
 
 export interface CreateOrderCustomerInput {
   email: string;
@@ -289,24 +290,15 @@ export async function createOrderFromCart(
       throw err;
     }
 
-    // COD Scope & Restrictions (D-021)
-    const hasPhysical = cart.items.some((item: any) => {
-      const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-      return productMap.get(prodId)?.itemType === 'physical';
-    });
-    const hasService = cart.items.some((item: any) => {
-      const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-      return productMap.get(prodId)?.itemType === 'service';
-    });
-
+    // COD Scope & Restrictions (D-021 & PAY-01)
     if (paymentMethod === 'cod') {
-      if (hasService && !hasPhysical) {
-        const err = new Error('COD_PROHIBITED_FOR_DIGITAL: Cash on Delivery is strictly prohibited for service packages and digital deliverables.');
-        (err as any).statusCode = 422;
-        throw err;
-      }
-      if (hasService && hasPhysical) {
-        const err = new Error('COD_PROHIBITED_FOR_MIXED_CART: Mixed carts containing digital services cannot use Cash on Delivery. Please use Bank Transfer or checkout separately.');
+      const itemsForCod = cart.items.map((item: any) => {
+        const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
+        return { itemType: productMap.get(prodId)?.itemType || 'physical' };
+      });
+      const codVerdict = validateCodEligibility(itemsForCod);
+      if (!codVerdict.eligible) {
+        const err = new Error(`${codVerdict.code}: ${codVerdict.message}`);
         (err as any).statusCode = 422;
         throw err;
       }
@@ -522,9 +514,10 @@ export async function createOrderFromCart(
           items: orderItems as any,
           shippingFee,
           paymentMethod,
-          orderStatus: 'pending',
+          orderStatus: paymentMethod === 'cod' ? 'confirmed' : 'pending',
           paymentStatus: 'unpaid',
           fulfillmentStatus: 'unfulfilled',
+          remittanceStatus: paymentMethod === 'cod' ? 'pending_collection' : 'not_applicable',
           appliedTariff: {
             status: tariffQuote.isProvisional ? 'provisional' : 'owner_approved',
             amount: tariffQuote.amount,

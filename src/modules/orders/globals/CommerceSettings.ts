@@ -137,11 +137,18 @@ export const CommerceSettings: GlobalConfig = {
           required: true,
           options: [
             {
-              label: 'Deferred Review (Record as pending outbox; do not dispatch live SMTP)',
+              label: 'Deferred Review (Outbox only - Active)',
               value: 'deferred_review',
             },
-            { label: 'Live SMTP (Dispatch real outbound notification emails)', value: 'live_smtp' },
+            {
+              label: 'Live SMTP (Disabled - Planned for pre-launch, not yet connected)',
+              value: 'live_smtp',
+            },
           ],
+          admin: {
+            description:
+              'Outbound emails are safely recorded as pending outbox items under deferred review. Live SMTP dispatch is currently disabled pending mail server configuration before launch.',
+          },
         },
         { name: 'smtpHost', type: 'text', label: 'SMTP Server Host' },
         { name: 'smtpPort', type: 'number', label: 'SMTP Server Port' },
@@ -162,6 +169,12 @@ export const CommerceSettings: GlobalConfig = {
   hooks: {
     beforeChange: [
       async ({ data, originalDoc, req }) => {
+        if (data?.emailDispatchMode === 'live_smtp') {
+          throw new Error(
+            'LIVE_SMTP_NOT_CONNECTED: Live SMTP email dispatch is disabled and not yet connected. It remains a pre-launch operational gate.'
+          );
+        }
+
         if (!originalDoc) return data;
         const changes: string[] = [];
         const trackFields = [
