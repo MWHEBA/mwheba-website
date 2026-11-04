@@ -2289,6 +2289,9 @@ export interface CommerceSetting {
    * Determines whether factory physical production jobs can advance to in_printing before finance verifies the corporate bank transfer.
    */
   productionPolicy: 'allow_immediate_production' | 'require_payment_clearance';
+  /**
+   * Outbound emails are safely recorded as pending outbox items under deferred review. Live SMTP dispatch is currently disabled pending mail server configuration before launch.
+   */
   emailDispatchMode: 'deferred_review' | 'live_smtp';
   smtpHost?: string | null;
   smtpPort?: number | null;
