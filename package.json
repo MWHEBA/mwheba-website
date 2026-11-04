@@ -16,6 +16,7 @@
     "migrate:up": "payload migrate",
     "migrate:down": "payload migrate:down",
     "migrate:status": "payload migrate:status",
+    "migrate:content": "tsx src/scripts/migration/index.ts",
     "db:seed": "tsx src/scripts/seed.ts"
   },
   "dependencies": {

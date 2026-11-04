@@ -41,7 +41,7 @@ interface FinanceVerificationPanelProps {
 }
 
 export function FinanceVerificationPanel({
-  transfers: initialTransfers,
+  transfers: initialTransfers = [],
   authToken,
   onVerificationComplete,
   locale = 'ar',
@@ -347,9 +347,31 @@ export function FinanceVerificationPanel({
                 <div>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block' }}>{isArabic ? 'إشعار الإيداع المرفوع' : 'Uploaded Receipt Slip'}</span>
                   {selectedTransfer.receiptStorageKey ? (
-                    <span style={{ fontSize: '0.8125rem', color: 'var(--brand-primary)', fontFamily: 'monospace' }}>
-                      {selectedTransfer.receiptStorageKey}
-                    </span>
+                    <div style={{ marginTop: '0.35rem' }}>
+                      <a
+                        href={`/api/payments/bank-transfer/${selectedTransfer.id}/receipt`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          padding: '0.35rem 0.65rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid var(--brand-primary)',
+                          backgroundColor: 'var(--bg-secondary)',
+                          color: 'var(--brand-primary-dark)',
+                          fontSize: '0.8125rem',
+                          fontWeight: 600,
+                          textDecoration: 'none',
+                        }}
+                      >
+                        📄 {isArabic ? 'معاينة وفحص إشعار الإيداع' : 'Inspect Receipt Slip'}
+                      </a>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'block', marginTop: '0.25rem', fontFamily: 'monospace' }}>
+                        {selectedTransfer.receiptStorageKey}
+                      </span>
+                    </div>
                   ) : (
                     <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>{isArabic ? 'لم يُرفق ملف' : 'No file attached'}</span>
                   )}

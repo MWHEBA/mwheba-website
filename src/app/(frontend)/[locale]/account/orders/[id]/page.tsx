@@ -255,6 +255,23 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
                     <div style={{ fontSize: '0.8125rem', backgroundColor: 'var(--bg-primary)', padding: '0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
                       <div>{isArabic ? 'المرجع البنكي المزعوم:' : 'Bank Reference:'} <strong>{existingTransfer.bankReferenceCode}</strong></div>
                       <div>{isArabic ? 'المبلغ المسجل:' : 'Claimed Amount:'} <strong>{Number(existingTransfer.claimedAmount).toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</strong></div>
+                      {existingTransfer.receiptStorageKey && (
+                        <div style={{ marginTop: '0.5rem' }}>
+                          <a
+                            href={`/api/payments/bank-transfer/${existingTransfer.id}/receipt`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{
+                              color: 'var(--brand-primary)',
+                              fontSize: '0.8125rem',
+                              textDecoration: 'underline',
+                              fontWeight: 600,
+                            }}
+                          >
+                            📄 {isArabic ? 'معاينة الإشعار المرفوع' : 'View Uploaded Slip'}
+                          </a>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

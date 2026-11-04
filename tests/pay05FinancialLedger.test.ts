@@ -7,6 +7,11 @@ import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
 import { toIntegerPiastres } from '@/modules/orders/logic/orderSnapshotEngine';
+import { NextRequest } from 'next/server';
+import { GET as receiptViewerGet } from '@/app/api/payments/bank-transfer/[id]/receipt/route';
+import { saveArtworkFile } from '@/modules/customization/lib/privateStorage';
+import { submitBankTransfer } from '@/modules/payments/services/bankTransferService';
+import { FinanceVerificationPanel } from '@/modules/payments/ui/FinanceVerificationPanel';
 import FinanceVerificationPage from '@/app/(frontend)/[locale]/finance/verification/page';
 import CustomerOrderPage from '@/app/(frontend)/[locale]/account/orders/[id]/page';
 import { BankTransferReceiptUploadForm } from '@/modules/payments/ui/BankTransferReceiptUploadForm';
@@ -280,12 +285,23 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
         body: JSON.stringify({ obj: { id: 99999 } }),
       }).catch(() => null);
 
-      // If server is running or handler called
       if (res) {
         expect(res.status).toBe(404);
         const data = await res.json();
         expect(data.error).toBe('PAYMOB_DISABLED');
       }
+    });
+
+    it('permanently locks Paymob endpoint returning 404 PAYMOB_DISABLED and cannot be toggled on via ENABLE_PAYMOB_GATEWAY alone', async () => {
+      const config = (await configPromise) as any;
+      const paymobEndpoint = config.endpoints?.find((e: any) => e.path === '/paymob/webhook');
+      expect(paymobEndpoint).toBeDefined();
+
+      const response = await paymobEndpoint.handler({} as any);
+      expect(response.status).toBe(404);
+      const data = await response.json();
+      expect(data.error).toBe('PAYMOB_DISABLED');
+      expect(data.message).toContain('Paymob gateway is formally deferred to Phase 2 per Decision D-008');
     });
   });
 
@@ -355,6 +371,151 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
       });
       const html = renderToString(jsx);
       expect(html).toContain('تسجيل دخول الإدارة المالية');
+    });
+  });
+
+  // ===========================================================================
+  // 6. Secure Bank Transfer Receipt Inspection & Strict Authorization
+  // ===========================================================================
+  describe('6. Secure Bank Transfer Receipt Inspection & Strict Authorization', () => {
+    it('provides secure receipt download to finance officers and order owners, rejecting unauthorized and anonymous callers', async () => {
+      // 1. Save actual test receipt file on disk
+      const mockSlipContent = Buffer.from('%PDF-1.4 Mock Corporate Deposit Slip Content');
+      const saved = await saveArtworkFile(mockSlipContent, 'cib_deposit_slip_verified.pdf');
+
+      // 2. Register artwork asset owned by customerUser
+      const receiptAsset = await payload.create({
+        collection: 'artwork-assets',
+        data: {
+          storageKey: saved.storageKey,
+          originalFilename: 'cib_deposit_slip_verified.pdf',
+          mimeType: 'application/pdf',
+          fileSize: mockSlipContent.length,
+          uploader: customerUser.id,
+        },
+        context: { isTrustedUpload: true },
+      });
+      cleanup.assets.push(receiptAsset.id);
+
+      // 3. Create an order for customerUser
+      const cart = await getOrCreateCart(payload);
+      cleanup.carts.push(cart.id);
+
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: { items: [{ product: product1.id, quantity: 10 }] },
+      });
+
+      const quote = await buildCheckoutQuote(payload, cart.id, { method: 'pickup' });
+      const orderRes = await createOrderFromCart(payload, {
+        cartId: cart.id,
+        guestSecret: cart.secret,
+        user: customerUser,
+        customer: { email: customerUser.email, companyName: 'Receipt Verification Corp', contactPerson: 'Cust', phone: '+20101' },
+        delivery: { method: 'pickup', expectedShippingFee: quote.shippingFee },
+        paymentMethod: 'bank_transfer',
+        expectedGrandTotal: quote.grandTotal,
+        idempotencyKey: `receipt_view_${unique()}`,
+      });
+      cleanup.orders.push(orderRes.order.id);
+
+      // 4. Submit bank transfer with uploaded receipt
+      const transferRes = await submitBankTransfer(payload, {
+        orderId: orderRes.order.id,
+        claimedAmount: quote.grandTotal,
+        bankReferenceCode: 'CIB-TXN-REC-900',
+        receiptStorageKey: saved.storageKey,
+        customer: customerUser,
+      });
+      cleanup.transfers.push(transferRes.transferId);
+
+      // A. Anonymous Access -> 401 UNAUTHORIZED
+      const anonReq = new NextRequest(`http://localhost:3000/api/payments/bank-transfer/${transferRes.transferId}/receipt`);
+      const anonRes = await receiptViewerGet(anonReq, {
+        params: Promise.resolve({ id: String(transferRes.transferId) }),
+      });
+      expect(anonRes.status).toBe(401);
+      const anonJson = await anonRes.json();
+      expect(anonJson.error).toBe('UNAUTHORIZED');
+
+      // B. Competitor / Unrelated Customer Access -> 403 FORBIDDEN
+      const originalAuth = payload.auth;
+      payload.auth = async () => ({ user: competitorCustomer });
+      try {
+        const compReq = new NextRequest(`http://localhost:3000/api/payments/bank-transfer/${transferRes.transferId}/receipt`);
+        const compRes = await receiptViewerGet(compReq, {
+          params: Promise.resolve({ id: String(transferRes.transferId) }),
+        });
+        expect(compRes.status).toBe(403);
+        const compJson = await compRes.json();
+        expect(compJson.error).toBe('FORBIDDEN');
+      } finally {
+        payload.auth = originalAuth;
+      }
+
+      // C. Finance Officer Access -> 200 OK (Allowed with full binary inspection)
+      payload.auth = async () => ({ user: financeUser });
+      try {
+        const finReq = new NextRequest(`http://localhost:3000/api/payments/bank-transfer/${transferRes.transferId}/receipt`);
+        const finRes = await receiptViewerGet(finReq, {
+          params: Promise.resolve({ id: String(transferRes.transferId) }),
+        });
+        expect(finRes.status).toBe(200);
+        expect(finRes.headers.get('Content-Type')).toBe('application/pdf');
+        expect(finRes.headers.get('Content-Disposition')).toContain('inline');
+        const finBuffer = await finRes.arrayBuffer();
+        expect(Buffer.from(finBuffer).toString()).toContain('%PDF-1.4 Mock Corporate Deposit Slip Content');
+      } finally {
+        payload.auth = originalAuth;
+      }
+
+      // D. Order Owner Customer Access -> 200 OK (Customer can view their own receipt)
+      payload.auth = async () => ({ user: customerUser });
+      try {
+        const ownerReq = new NextRequest(`http://localhost:3000/api/payments/bank-transfer/${transferRes.transferId}/receipt`);
+        const ownerRes = await receiptViewerGet(ownerReq, {
+          params: Promise.resolve({ id: String(transferRes.transferId) }),
+        });
+        expect(ownerRes.status).toBe(200);
+        expect(ownerRes.headers.get('Content-Type')).toBe('application/pdf');
+      } finally {
+        payload.auth = originalAuth;
+      }
+
+      // E. Non-existent Transfer -> 404 TRANSFER_NOT_FOUND
+      payload.auth = async () => ({ user: financeUser });
+      try {
+        const missingReq = new NextRequest('http://localhost:3000/api/payments/bank-transfer/999999/receipt');
+        const missingRes = await receiptViewerGet(missingReq, {
+          params: Promise.resolve({ id: '999999' }),
+        });
+        expect(missingRes.status).toBe(404);
+      } finally {
+        payload.auth = originalAuth;
+      }
+
+      // F. Verify FinanceVerificationPanel renders the inspect link
+      const panelHtml = renderToString(
+        React.createElement(FinanceVerificationPanel, {
+          transfers: [
+            {
+              id: transferRes.transferId,
+              orderId: orderRes.order.id,
+              orderTotal: quote.grandTotal,
+              claimedAmount: quote.grandTotal,
+              bankReferenceCode: 'CIB-TXN-REC-900',
+              status: 'pending_verification',
+              receiptStorageKey: saved.storageKey,
+              submittedAt: new Date().toISOString(),
+            },
+          ],
+          locale: 'ar',
+        })
+      );
+
+      expect(panelHtml).toContain('معاينة وفحص إشعار الإيداع');
+      expect(panelHtml).toContain(`/api/payments/bank-transfer/${transferRes.transferId}/receipt`);
     });
   });
 });

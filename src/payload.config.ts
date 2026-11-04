@@ -27,7 +27,8 @@ import { InquirySettings } from './modules/content/globals/InquirySettings';
 import { CommerceSettings } from './modules/orders/globals/CommerceSettings';
 import { validateCartMoq } from './modules/cart-checkout/logic/moqEngine';
 import { toIntegerPiastres } from './modules/orders/logic/orderSnapshotEngine';
-import { paymobWebhookHandler } from './modules/payments/endpoints/paymobWebhook';
+// Paymob gateway engine is preserved dormant for Phase 2 (Decision D-008)
+// import { paymobWebhookHandler } from './modules/payments/endpoints/paymobWebhook';
 import { signPrivateMedia, downloadPrivateMedia } from './modules/customization/endpoints/privateMedia';
 
 const dbUri = process.env.DATABASE_URI || 'postgres://postgres@127.0.0.1:5432/mwheba_dev';
@@ -41,29 +42,22 @@ export default buildConfig({
   endpoints: [
     { path: '/private-media/:id/sign', method: 'post', handler: signPrivateMedia },
     { path: '/private-media/:id/download', method: 'get', handler: downloadPrivateMedia },
-    ...(process.env.ENABLE_PAYMOB_GATEWAY === 'true'
-      ? [
+    // Decision D-008: Paymob online gateway is formally deferred to Phase 2.
+    // Live activation via environment flag is permanently locked down in Phase 1 until formal approval.
+    {
+      path: '/paymob/webhook',
+      method: 'post' as const,
+      handler: async () => {
+        return Response.json(
           {
-            path: '/paymob/webhook',
-            method: 'post' as const,
-            handler: paymobWebhookHandler,
+            error: 'PAYMOB_DISABLED',
+            message:
+              'Paymob gateway is formally deferred to Phase 2 per Decision D-008. Live activation via ENABLE_PAYMOB_GATEWAY is permanently locked in Phase 1.',
           },
-        ]
-      : [
-          {
-            path: '/paymob/webhook',
-            method: 'post' as const,
-            handler: async () => {
-              return Response.json(
-                {
-                  error: 'PAYMOB_DISABLED',
-                  message: 'Paymob gateway is formally deferred to Phase 2 per Decision D-008 and is disabled in Phase 1.',
-                },
-                { status: 404 }
-              );
-            },
-          },
-        ]),
+          { status: 404 }
+        );
+      },
+    },
   ],
   collections: [
     Users,
