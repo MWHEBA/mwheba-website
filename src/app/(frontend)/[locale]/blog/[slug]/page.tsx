@@ -5,6 +5,7 @@ import { draftMode, headers } from 'next/headers';
 import Link from 'next/link';
 import { isValidLocale, type Locale } from '@/shared/lib/i18n';
 import { safeJsonLdReplacer } from '@/shared/lib/safeJsonLd';
+import { generateArticleSchema, generateBreadcrumbSchema } from '@/shared/lib/schemaGenerator';
 import { getPayloadClient } from '@/lib/payload';
 import { hasRole } from '@/modules/identity/access/roles';
 
@@ -139,30 +140,37 @@ export default async function BlogPostDetailPage({ params }: BlogPostDetailPageP
     notFound();
   }
 
-  // Schema.org Article Structured Data (JSON-LD)
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'Article',
-    headline: post.title,
-    description: post.excerpt,
-    author: {
-      '@type': 'Organization',
-      name: post.author,
+  // Schema.org Article & Breadcrumbs Structured Data (JSON-LD)
+  const articleSchema = generateArticleSchema(
+    {
+      title: post.title,
+      description: post.excerpt,
+      slug: post.slug,
+      publishedAt: post.publishedAt,
+      authorName: post.author,
+      imageUrl: post.coverImage,
     },
-    publisher: {
-      '@type': 'Organization',
-      name: isArabic ? 'وكالة موهبة' : 'MWHEBA Agency',
-      url: `https://mwheba.com/${locale}`,
-    },
-    inLanguage: locale,
-  };
+    locale as 'ar' | 'en',
+  );
+
+  const breadcrumbsSchema = generateBreadcrumbSchema([
+    { name: isArabic ? 'الرئيسية' : 'Home', url: `/${locale}` },
+    { name: isArabic ? 'المدونة المعرفية' : 'Knowledge Blog', url: `/${locale}/blog` },
+    { name: post.title, url: `/${locale}/blog/${post.slug}` },
+  ]);
 
   return (
     <article className="blog-post-detail-wrapper" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Schema.org Article JSON-LD (Safely encoded to prevent </script> injection) */}
+      {/* Schema.org Structured Data (Safely encoded to prevent </script> injection) */}
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: safeJsonLdReplacer(jsonLd) }}
+        id="article-jsonld"
+        dangerouslySetInnerHTML={{ __html: safeJsonLdReplacer(articleSchema) }}
+      />
+      <script
+        type="application/ld+json"
+        id="article-breadcrumbs-jsonld"
+        dangerouslySetInnerHTML={{ __html: safeJsonLdReplacer(breadcrumbsSchema) }}
       />
 
       {/* Draft Mode Active Inspection Banner */}

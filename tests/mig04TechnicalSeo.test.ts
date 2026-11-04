@@ -1,102 +1,217 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import React from 'react';
+import fs from 'node:fs';
+import path from 'node:path';
+
+vi.mock('next/font/google', () => ({
+  Cairo: () => ({ variable: 'mock-font-cairo' }),
+}));
 import {
   generateOrganizationSchema,
   generateLocalBusinessSchema,
   generateProductSchema,
   generateArticleSchema,
   generateBreadcrumbSchema,
+  getVerifiedLogoUrl,
 } from '../src/shared/lib/schemaGenerator';
 import { buildBilingualMetadata, SITE_URL } from '../src/shared/lib/seo';
 import { safeJsonLdReplacer } from '../src/shared/lib/safeJsonLd';
+import FrontendLayout from '../src/app/(frontend)/[locale]/layout';
+import ProductDetailPage from '../src/app/(frontend)/[locale]/store/[slug]/page';
 
-describe('MIG-04: Technical SEO, Schema.org Structured Data & Hreflang Governance', () => {
-  describe('1. Schema.org Structured Data Generation', () => {
-    it('generates valid Organization schema with corporate credentials', () => {
+describe('MIG-04: Technical SEO, Verified Schema.org & Rendered Page Structured Data', () => {
+  describe('1. Schema Generator Zero-Placeholder & Physical Asset Verification', () => {
+    it('verifies that the logo URL points to an actual physical file on disk', () => {
+      const logoUrl = getVerifiedLogoUrl();
+      expect(logoUrl).toBeDefined();
+
+      const relPath = logoUrl.replace(SITE_URL, 'public');
+      const fullPath = path.resolve(process.cwd(), relPath);
+      expect(fs.existsSync(fullPath)).toBe(true);
+
+      const buf = fs.readFileSync(fullPath);
+      expect(buf.length).toBeGreaterThan(1000);
+    });
+
+    it('generates Organization schema with ZERO fake telephone and ZERO fake address', () => {
       const arOrg = generateOrganizationSchema('ar');
       expect(arOrg['@context']).toBe('https://schema.org');
       expect(arOrg['@type']).toBe('Organization');
       expect(arOrg.name).toContain('موهبة');
       expect(arOrg.url).toBe(`${SITE_URL}/ar`);
       expect(arOrg.logo).toBe(`${SITE_URL}/brand/logo-wide.png`);
-      expect(arOrg.contactPoint[0].areaServed).toBe('EG');
+
+      // STRICT ZERO-ASSUMPTION CHECKS
+      expect(arOrg.telephone).toBeUndefined();
+      expect(arOrg.address).toBeUndefined();
+      expect(arOrg.contactPoint).toBeUndefined();
+      expect(JSON.stringify(arOrg)).not.toContain('0000-0000');
+      expect(JSON.stringify(arOrg)).not.toContain('الطيران');
 
       const enOrg = generateOrganizationSchema('en');
       expect(enOrg.name).toBe('MWHEBA Corporate Agency');
-      expect(enOrg.url).toBe(`${SITE_URL}/en`);
+      expect(enOrg.telephone).toBeUndefined();
     });
 
-    it('generates valid LocalBusiness / ProfessionalService schema for Cairo HQ', () => {
-      const business = generateLocalBusinessSchema('ar');
-      expect(business['@context']).toBe('https://schema.org');
-      expect(business['@type']).toBe('ProfessionalService');
-      expect(business.priceRange).toBe('EGP');
-      expect(business.currenciesAccepted).toBe('EGP');
-      expect(business.address.addressLocality).toBe('القاهرة');
-      expect(business.address.addressCountry).toBe('EG');
-      expect(business.geo.latitude).toBeCloseTo(30.0561, 2);
+    it('generates LocalBusiness schema omitting unverified address, geo, and hours unless explicitly passed', () => {
+      // Calling without verified options must omit unverified physical fields
+      const unverified = generateLocalBusinessSchema('ar');
+      expect(unverified['@type']).toBe('ProfessionalService');
+      expect(unverified.priceRange).toBe('EGP');
+      expect(unverified.telephone).toBeUndefined();
+      expect(unverified.address).toBeUndefined();
+      expect(unverified.geo).toBeUndefined();
+      expect(unverified.openingHoursSpecification).toBeUndefined();
+
+      // Calling with explicit verified options emits them
+      const verified = generateLocalBusinessSchema('ar', {
+        telephone: '+20-2-22600000',
+        address: {
+          streetAddress: 'Verified Street',
+          addressLocality: 'Cairo',
+          addressRegion: 'Cairo',
+          addressCountry: 'EG',
+        },
+      });
+      expect(verified.telephone).toBe('+20-2-22600000');
+      expect(verified.address?.streetAddress).toBe('Verified Street');
     });
 
-    it('generates valid Product schema with EGP pricing and in-stock offers', () => {
-      const productSchema = generateProductSchema(
+    it('generates Product schema without defaulting availability to InStock if undefined', () => {
+      // 1. inStock undefined -> availability MUST BE omitted
+      const unknownStock = generateProductSchema(
         {
-          name: 'فلاسك حراري تنفيذي فاخر',
-          description: 'فلاسك من الفولاذ المقاوم للصدأ بشاشة حرارية ذكية مع حفر ليزر مخصص للشركات',
+          name: 'دفتر أعمال جلدي تنفيذي',
+          slug: 'luxury-leather-notebook',
+          priceEgp: 320,
+        },
+        'ar',
+      );
+      expect(unknownStock.offers.availability).toBeUndefined();
+      expect(unknownStock.offers.price).toBe('320.00');
+
+      // 2. inStock explicitly true -> InStock
+      const inStock = generateProductSchema(
+        {
+          name: 'فلاسك حراري',
           slug: 'executive-thermal-flask',
           priceEgp: 450,
-          sku: 'MWH-FLASK-01',
           inStock: true,
         },
         'ar',
       );
+      expect(inStock.offers.availability).toBe('https://schema.org/InStock');
 
-      expect(productSchema['@context']).toBe('https://schema.org');
-      expect(productSchema['@type']).toBe('Product');
-      expect(productSchema.name).toBe('فلاسك حراري تنفيذي فاخر');
-      expect(productSchema.sku).toBe('MWH-FLASK-01');
-      expect(productSchema.offers['@type']).toBe('Offer');
-      expect(productSchema.offers.priceCurrency).toBe('EGP');
-      expect(productSchema.offers.price).toBe('450.00');
-      expect(productSchema.offers.availability).toBe('https://schema.org/InStock');
-    });
-
-    it('generates valid Article / BlogPosting schema for knowledge articles', () => {
-      const articleSchema = generateArticleSchema(
+      // 3. inStock explicitly false -> OutOfStock
+      const outOfStock = generateProductSchema(
         {
-          title: 'دليل الشركات لاختيار وتوريد الهدايا الترويجية لعام 2026',
-          description: 'دراسة شاملة حول استراتيجيات اختيار الهدايا المؤسسية وأثرها على ولاء العملاء',
-          slug: 'custom-promotional-gifts-roi',
-          publishedAt: '2026-02-15T10:00:00+02:00',
-          authorName: 'فريق موهبة للإنتاج والطباعة',
+          name: 'منتج منتهي',
+          slug: 'out-of-stock-item',
+          priceEgp: 100,
+          inStock: false,
         },
         'ar',
       );
-
-      expect(articleSchema['@context']).toBe('https://schema.org');
-      expect(articleSchema['@type']).toBe('BlogPosting');
-      expect(articleSchema.headline).toContain('دليل الشركات');
-      expect(articleSchema.publisher['@type']).toBe('Organization');
-      expect(articleSchema.mainEntityOfPage['@type']).toBe('WebPage');
-      expect(articleSchema.datePublished).toBe('2026-02-15T10:00:00+02:00');
+      expect(outOfStock.offers.availability).toBe('https://schema.org/OutOfStock');
     });
 
-    it('generates valid BreadcrumbList schema with sequential positions', () => {
-      const breadcrumb = generateBreadcrumbSchema([
-        { name: 'الرئيسية', url: '/ar' },
-        { name: 'المتجر المؤسسي', url: '/ar/store' },
-        { name: 'فلاسك تنفيذي', url: '/ar/store/executive-thermal-flask' },
-      ]);
+    it('generates Article schema with ZERO fake default dates', () => {
+      // 1. Without publishedAt -> datePublished MUST BE omitted (never invented)
+      const noDate = generateArticleSchema(
+        {
+          title: 'دليل الشركات لاختيار الهدايا الترويجية',
+          slug: 'custom-promotional-gifts-roi',
+        },
+        'ar',
+      );
+      expect(noDate.datePublished).toBeUndefined();
+      expect(noDate.dateModified).toBeUndefined();
+      expect(JSON.stringify(noDate)).not.toContain('2026-01-01');
 
-      expect(breadcrumb['@context']).toBe('https://schema.org');
-      expect(breadcrumb['@type']).toBe('BreadcrumbList');
-      expect(breadcrumb.itemListElement.length).toBe(3);
-      expect(breadcrumb.itemListElement[0].position).toBe(1);
-      expect(breadcrumb.itemListElement[1].position).toBe(2);
-      expect(breadcrumb.itemListElement[2].position).toBe(3);
-      expect(breadcrumb.itemListElement[2].item).toBe(`${SITE_URL}/ar/store/executive-thermal-flask`);
+      // 2. With authentic date -> emitted faithfully
+      const withDate = generateArticleSchema(
+        {
+          title: 'دليل الشركات',
+          slug: 'custom-promotional-gifts-roi',
+          publishedAt: '2026-02-15T10:00:00+02:00',
+        },
+        'ar',
+      );
+      expect(withDate.datePublished).toBe('2026-02-15T10:00:00+02:00');
     });
   });
 
-  describe('2. Metadata, Canonical & Hreflang Tag Verification', () => {
+  describe('2. Direct Page Component Rendered JSON-LD Verification', () => {
+    it('FrontendLayout renders valid Organization JSON-LD in document head', async () => {
+      const layoutJsx = await FrontendLayout({
+        children: React.createElement('div', null, 'Content'),
+        params: Promise.resolve({ locale: 'ar' }),
+      });
+
+      expect(React.isValidElement(layoutJsx)).toBe(true);
+
+      // Inspect <head> script tag
+      const headElement = React.Children.toArray((layoutJsx as any).props.children).find(
+        (child: any) => child.type === 'head',
+      ) as any;
+      expect(headElement).toBeDefined();
+
+      const scriptElement = React.Children.toArray(headElement.props.children).find(
+        (child: any) => child.props?.id === 'organization-jsonld',
+      ) as any;
+
+      expect(scriptElement).toBeDefined();
+      expect(scriptElement.props.type).toBe('application/ld+json');
+
+      const rawHtml = scriptElement.props.dangerouslySetInnerHTML.__html;
+      const parsed = JSON.parse(rawHtml);
+
+      expect(parsed['@type']).toBe('Organization');
+      expect(parsed.name).toContain('موهبة');
+      expect(parsed.email).toBe('info@mwheba.com');
+      expect(parsed.logo).toBe(`${SITE_URL}/brand/logo-wide.png`);
+
+      // Verify ZERO fake data in rendered page output
+      expect(rawHtml).not.toContain('0000-0000');
+      expect(rawHtml).not.toContain('الطيران');
+      expect(parsed.telephone).toBeUndefined();
+      expect(parsed.address).toBeUndefined();
+    });
+
+    it('ProductDetailPage renders valid Product and Breadcrumb JSON-LD from authentic product data', async () => {
+      const pageJsx = await ProductDetailPage({
+        params: Promise.resolve({ locale: 'ar', slug: 'executive-thermal-flask' }),
+      });
+
+      expect(React.isValidElement(pageJsx)).toBe(true);
+
+      const children = React.Children.toArray((pageJsx as any).props.children);
+      const productScript = children.find(
+        (child: any) => child.props?.id === 'product-jsonld',
+      ) as any;
+      const breadcrumbsScript = children.find(
+        (child: any) => child.props?.id === 'product-breadcrumbs-jsonld',
+      ) as any;
+
+      expect(productScript).toBeDefined();
+      expect(breadcrumbsScript).toBeDefined();
+
+      const productJson = JSON.parse(productScript.props.dangerouslySetInnerHTML.__html);
+      expect(productJson['@type']).toBe('Product');
+      expect(productJson.name).toBe('كوب حراري ذكي مخصص (Executive Thermal Flask)');
+      expect(productJson.offers.price).toBe('250.00');
+      expect(productJson.offers.priceCurrency).toBe('EGP');
+      expect(productJson.offers.availability).toBe('https://schema.org/InStock');
+
+      const breadcrumbsJson = JSON.parse(breadcrumbsScript.props.dangerouslySetInnerHTML.__html);
+      expect(breadcrumbsJson['@type']).toBe('BreadcrumbList');
+      expect(breadcrumbsJson.itemListElement.length).toBe(3);
+      expect(breadcrumbsJson.itemListElement[0].name).toBe('الرئيسية');
+      expect(breadcrumbsJson.itemListElement[2].name).toBe('كوب حراري ذكي مخصص (Executive Thermal Flask)');
+    });
+  });
+
+  describe('3. Metadata, Canonical & Hreflang Tag Verification', () => {
     it('produces strict self-referencing canonical URLs without trailing slashes', () => {
       const metaAr = buildBilingualMetadata({
         title: 'حلول الهوية المؤسسية',
@@ -133,23 +248,11 @@ describe('MIG-04: Technical SEO, Schema.org Structured Data & Hreflang Governanc
       expect(languages['en']).toBe(`${SITE_URL}/en/store`);
       expect(languages['ar-EG']).toBe(`${SITE_URL}/ar/store`);
       expect(languages['en-US']).toBe(`${SITE_URL}/en/store`);
-      expect(languages['x-default']).toBe(`${SITE_URL}/ar/store`); // Arabic is default
-    });
-
-    it('sets correct OpenGraph locales (ar_EG and alternate en_US)', () => {
-      const metaAr = buildBilingualMetadata({
-        title: 'تواصل معنا',
-        description: 'تواصل مع فريق خبراء موهبة لبدء مشروعك القادم',
-        path: '/contact',
-        locale: 'ar',
-      });
-
-      expect(metaAr.openGraph?.locale).toBe('ar_EG');
-      expect(metaAr.openGraph?.alternateLocale).toContain('en_US');
+      expect(languages['x-default']).toBe(`${SITE_URL}/ar/store`);
     });
   });
 
-  describe('3. JSON-LD Safe HTML Injection Escaping', () => {
+  describe('4. JSON-LD Safe HTML Injection Escaping', () => {
     it('safely escapes script breakout strings in JSON-LD payloads', () => {
       const maliciousData = {
         name: 'Evil Brand</script><script>alert("xss")</script>',

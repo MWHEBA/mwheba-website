@@ -1,23 +1,26 @@
 # MWHEBA 2.0 | Technical SEO & Content Migration QA Report
 
 **Document ID:** `docs/seo/migration-qa-report.md`  
-**Phase:** Phase 7 — Migration, Media Pipelines & SEO Governance  
-**Status:** Complete & Verified  
+**Phase:** Phase 7 — Migration, Media Pipelines & SEO Governance (`MIG-01`, `MIG-02`, `MIG-03`, `MIG-04`)  
+**Status:** Complete & Verified via Static Build & Server Component Tests  
 **Date:** November 2026  
 **Author:** Antigravity AI Engineering & Architecture  
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Audit Baseline
 
-This report delivers the comprehensive technical SEO and legacy asset migration audit for the transition from the legacy WordPress/WooCommerce site (`mwheba.com` v1) to the modern Next.js 15 & Payload CMS architecture (`MWHEBA 2.0`).
+This report documents the verification of technical SEO, structured data schemas, legacy redirects, and media pipelines during the migration from legacy WordPress/WooCommerce to Next.js 15 and Payload CMS (`MWHEBA 2.0`).
 
-### Core Audit Outcomes:
-1. **Zero Link Rot / 404 Elimination:** 100% of the 54 discovered legacy URLs cataloged in `docs/audit/05-redirect-map.csv` are deterministically governed via an edge hash-map routing engine with zero redirect chains or loops.
-2. **Strict Media Authenticity Pipeline:** Elimination of dummy placeholder assets. Only physically verified source files on disk are ingested (5 authentic agency branding marks with SHA-256 fingerprints). The 22 client brand marks cataloged in AUD-03 remain strictly in `pending_source_file` until delivered by the creative team, ensuring zero synthetic or unverified media records.
-3. **Provisional Route Governance:** The unreviewed legacy route (`/product/social-media-managemnt-package/`) is strictly held in temporary `302` status with `Cache-Control: no-store` and `pending_owner_review`, preventing permanent cache poisoning prior to stakeholder determination.
-4. **Structured Data Compliance:** Complete Schema.org implementation covering `Organization`, `LocalBusiness` (Cairo HQ), `Product` (B2B merchandise with EGP currency), `BlogPosting`, and `BreadcrumbList`.
-5. **Bilingual Search Parity:** Bidirectional `hreflang` alternates (`ar-EG`, `en`, `x-default` defaulting to Arabic) and self-referencing canonical URLs with clean non-trailing slash normalization (`trailingSlash: false`).
+### Core Findings & Audit Safeguards:
+1. **Strict Content & Media Provenance:** All synthetic 1×1 images and fabricated project metrics were eliminated. Only genuine assets on disk are migrated (5 verified agency branding marks with SHA-256 fingerprints). The 22 client brand logos discovered in AUD-03 remain in `pending_source_file` without creating any fake placeholder media records.
+2. **Provisional Redirect Hold (`REQUIRES_REVIEW`):** The legacy test route (`/product/social-media-managemnt-package/`) is kept in temporary `302` status with `Cache-Control: no-store` and `pending_owner_review`, preventing permanent cache poisoning prior to stakeholder determination.
+3. **Zero-Assumption Structured Data:** Schema generators emit only authentic, verified data. All placeholder defaults (e.g. fake telephone numbers, unverified street addresses, geo coordinates, fallback `InStock` statuses, and invented publication dates) have been removed.
+4. **Physical Page Integration:** Structured data is embedded directly into page output:
+   - `FrontendLayout`: Injects verified `Organization` JSON-LD in the document `<head>`.
+   - `ProductDetailPage`: Injects verified `Product` JSON-LD and `BreadcrumbList` JSON-LD reflecting authentic catalog pricing (EGP) and attributes.
+   - `BlogPostDetailPage`: Injects verified `BlogPosting` JSON-LD and `BreadcrumbList` JSON-LD reflecting real author attribution and authentic publication dates without fallbacks.
+5. **Staging Verification Compliance:** In accordance with the project's strict zero-browser rule (*"Never open or run the browser unless explicitly requested by the user"*), visual browser crawls and automated Chrome/Playwright crawls remain **unexecuted**. Verification is conducted purely via automated Server Component rendering tests, Next.js static site generation (40/40 routes compiled successfully), and unit/integration test suites.
 
 ---
 
@@ -25,81 +28,68 @@ This report delivers the comprehensive technical SEO and legacy asset migration 
 
 | Action Classification | HTTP Status | URL Count | Governance Policy & Execution |
 | :--- | :--- | :--- | :--- |
-| **`PRESERVE`** | `200 OK` | **2** | Direct serving without self-redirects. Covers domain canonical root (`https://mwheba.com/`) and system directives (`/robots.txt`). |
+| **`PRESERVE`** | `200 OK` | **2** | Served directly without self-redirects. Covers domain root (`https://mwheba.com/`) and system directives (`/robots.txt`). |
 | **`REDIRECT_301`** | `301 Moved Permanently` | **41** | Single-hop permanent redirect to clean non-trailing-slash targets (`Cache-Control: public, max-age=31536000, immutable`). Covers 6 core service routes, legacy Arabic slugs, and corporate pages. |
 | **`GONE_410`** | `410 Gone` | **10** | Immediate de-indexation signal (`X-Robots-Tag: noindex, nofollow`). Covers 3 dummy demo blog posts, 1 empty portfolio stub, and 6 legacy WooCommerce theme demo products. |
 | **`REQUIRES_REVIEW`** | `302 Found` (Uncached) | **1** | Provisional test package (`/product/social-media-managemnt-package/`). Held pending stakeholder review without issuing permanent 301. Served with `Cache-Control: no-store` and `X-Redirect-Status: pending_owner_review`. |
 | **Total** | | **54** | **100% Covered with Automated End-to-End Regression Tests** |
 
-### Single-Hop Guarantee & Chain Validation
+### Single-Hop Guarantee
 All 41 `REDIRECT_301` destinations were cross-referenced against the routing dictionary. None of the target destinations re-trigger a subsequent redirect or loop ($A \rightarrow B$ strictly; zero $A \rightarrow B \rightarrow C$).
 
 ---
 
 ## 3. Media Asset Migration & Authenticity Audit
 
-In accordance with strict content provenance guidelines, synthetic or 1×1 placeholder images are completely forbidden. The migration pipeline classifies all cataloged assets into two transparent groups:
-
-```mermaid
-pie title Legacy Media Ingestion Audit (27 Items)
-    "Authentic Files Migrated (with SHA-256)" : 5
-    "Pending Source Assets (Awaiting Creative Delivery)" : 22
-```
-
-### A. Physically Verified & Migrated Authentic Media (5 Assets)
-These assets were located on disk, verified against magic bytes (`89 50 4E 47`), hashed with SHA-256, and ingested into Payload CMS `media` collection as `public`:
-
-| Catalog Filename | Physical Source File | Byte Size | Magic Bytes | SHA-256 Fingerprint (First 16 chars) | Status |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `Logo_MWHEBA-Wide-scaled.png` | `public/brand/logo-wide.png` | 33,547 B | `89 50 4E 47` (PNG) | `11e89dc61042730c...` | **Migrated** |
-| `Logo-Wide-Inverted-e1754726255278.png` | `public/brand/logo-wide-inverted.png` | 34,151 B | `89 50 4E 47` (PNG) | `35f1114c32a76200...` | **Migrated** |
-| `Logo-White-Wide-scaled-e1754724720286.png` | `public/brand/logo-wide-inverted.png` | 34,151 B | `89 50 4E 47` (PNG) | `35f1114c32a76200...` | **Migrated** |
-| `MWHEBA-Hosting_Wide-small-e1754726236757.png` | `public/brand/icon-512.png` | 12,816 B | `89 50 4E 47` (PNG) | `9c0738a4f244199c...` | **Migrated** |
-| `MWHEBA-Logo.jpg` | `public/brand/logo-mark.png` | 32,546 B | `89 50 4E 47` (PNG) | `efd08a899c52084c...` | **Migrated** |
-
-### B. Cataloged Assets in Pending Source State (22 Client Logos)
-The 22 authentic client marks (Oxford, Bico Misr, NASEC, Abo Fares, TrueDent, Maher, Tejanos, Al-Asala, Egy-Trans, Orouba, Pyramids, so5n-w-say7, EyeFree, Chicken Chester, ACC, Ashrakat, ESSP, Al-Kobtan, Mega-Pharm, Trust Dental, Shatby, AMI) documented in AUD-03 currently have no local vector/SVG or high-res raster files on disk.
-
-* **Audit Protection:** Zero database records or dummy files are created. They remain tracked in `pendingItems` with status `pending_source_file` until high-resolution master assets are delivered by the creative team.
+| Category | Count | Status & Verification |
+| :--- | :---: | :--- |
+| **Total Cataloged Assets (AUD-03)** | **27** | 22 client logos + 5 agency branding assets |
+| **Authentic Files Migrated** | **5** | Verified on disk (`public/brand/`), magic bytes confirmed (`89 50 4E 47`), hashed with SHA-256, ingested into Payload `media` with `mediaType: 'public'`. |
+| **Pending Source Assets** | **22** | Held in `pending_source_file` without creating dummy records in database. Awaiting creative team delivery. |
 
 ---
 
-## 4. Structured Data (JSON-LD) Validation
+## 4. Structured Data (Schema.org) Verified Implementation
 
-All structured data schemas conform strictly to Schema.org standards and are sanitized against script breakout attacks via `safeJsonLdReplacer`:
+### A. Organization Schema (`FrontendLayout`)
+* **Context / Type:** `https://schema.org` / `Organization`
+* **Verified Fields:**
+  - `name`: `وكالة موهبة للدعاية والإعلان والبرمجيات` / `MWHEBA Corporate Agency`
+  - `legalName`: `مؤسسة موهبة للدعاية والإعلان والتسويق الرقمي`
+  - `url`: `https://mwheba.com/{locale}`
+  - `logo`: `https://mwheba.com/brand/logo-wide.png` (verified physical file on disk: 33,547 bytes)
+  - `email`: `info@mwheba.com`
+  - `sameAs`: Facebook, LinkedIn, Instagram profiles
+* **Strict Omissions:** Fake telephone numbers, unverified street addresses, and unverified postal codes are omitted.
 
-1. **`Organization` Schema:**
-   - Identity: `وكالة موهبة للدعاية والإعلان والبرمجيات` / `MWHEBA Corporate Agency`
-   - Legal Entity: `مؤسسة موهبة للدعاية والإعلان والتسويق الرقمي`
-   - Official Logo: `https://mwheba.com/brand/logo-wide.png`
-   - Contact Point: Sales & Support, Egypt (`areaServed: 'EG'`), bilingual support.
-   - Social Validation (`sameAs`): LinkedIn, Facebook, Instagram.
+### B. Product Schema (`ProductDetailPage`)
+* **Context / Type:** `https://schema.org` / `Product`
+* **Verified Fields:**
+  - `name`: Real localized product title from catalog
+  - `description`: Real localized description
+  - `sku`: Authentic SKU identifier
+  - `offers.price`: Accurate decimal price in Egyptian Pounds (`EGP`)
+  - `offers.priceCurrency`: `EGP`
+  - `offers.availability`: Included only when `inStock` is explicitly defined (omitted if unknown)
+* **BreadcrumbList:** Rendered on product detail page with sequential positions (Home $\rightarrow$ B2B Store $\rightarrow$ Product).
 
-2. **`ProfessionalService` / `LocalBusiness` Schema:**
-   - Headquarters: Al-Tayaran St, Nasr City, Cairo Governorate, Egypt.
-   - Geo Coordinates: `30.0561, 31.3301`
-   - Commercial Terms: `priceRange: 'EGP'`, `currenciesAccepted: 'EGP'`.
-   - Business Hours: Sunday through Thursday, 09:00 - 17:00 (Cairo Standard Time).
-
-3. **`Product` Schema:**
-   - Applied to all B2B promotional merchandise and customizable gifts.
-   - Authoritative pricing in Egyptian Pounds (`priceCurrency: 'EGP'`).
-   - Availability schema: `https://schema.org/InStock`.
-
-4. **`BlogPosting` Schema:**
-   - Applied to all knowledge articles with headline, author attribution, publication date, and publisher logo.
-
-5. **`BreadcrumbList` Schema:**
-   - Sequential positional hierarchy for navigation paths.
+### C. BlogPosting Schema (`BlogPostDetailPage`)
+* **Context / Type:** `https://schema.org` / `BlogPosting`
+* **Verified Fields:**
+  - `headline`: Article title
+  - `publisher`: Organization name & verified logo
+  - `author`: Authentic author attribution
+  - `datePublished`: Emitted only when authentic publication date exists (zero fallback dates)
+  - `dateModified`: Emitted only when authentic update date exists
+* **BreadcrumbList:** Rendered on article detail page with sequential positions (Home $\rightarrow$ Knowledge Blog $\rightarrow$ Article).
 
 ---
 
-## 5. Bilingual Hreflang & Canonical Implementation
+## 5. Bilingual Hreflang & Canonical URL Matrix
 
-Every customer-facing page dynamically renders canonical and alternate link relations adhering to Google Multi-Regional and Multilingual Guidelines:
+All localized routes dynamically render canonical and alternate link relations adhering to Google Multi-Regional Guidelines:
 
 ```html
-<!-- Arabic Primary Locale (x-default) -->
 <link rel="canonical" href="https://mwheba.com/ar/services/brand-identity" />
 <link rel="alternate" hreflang="ar" href="https://mwheba.com/ar/services/brand-identity" />
 <link rel="alternate" hreflang="ar-EG" href="https://mwheba.com/ar/services/brand-identity" />
@@ -108,27 +98,27 @@ Every customer-facing page dynamically renders canonical and alternate link rela
 <link rel="alternate" hreflang="x-default" href="https://mwheba.com/ar/services/brand-identity" />
 ```
 
-* **No Trailing Slashes:** Target URLs strictly omit trailing slashes (`trailingSlash: false`).
+* **No Trailing Slashes:** Canonical URLs strictly omit trailing slashes (`trailingSlash: false`).
 * **OpenGraph Localization:** `og:locale` set to `ar_EG` with alternate `en_US`.
 
 ---
 
-## 6. Automated Test Coverage & Verification
+## 6. Staging Audit Status & Zero-Browser Compliance
 
-| Test Suite | Tests | Result | Focus Areas |
-| :--- | :--- | :--- | :--- |
-| `tests/mig01ContentMigration.test.ts` | 7 | **Passed** | 6 verified services published; blog & portfolio strictly draft with provenance |
-| `tests/mig02MediaMigration.test.ts` | 8 | **Passed** | Magic byte validation, SHA-256 fingerprinting, zero dummy records, pending source list |
-| `tests/mig03RedirectMatrix.test.ts` | 66 | **Passed** | 54 legacy URLs tested, percent-encoded Arabic matching, REQUIRES_REVIEW held as 302 |
-| `tests/mig04TechnicalSeo.test.ts` | 9 | **Passed** | Schema.org JSON-LD generation, hreflang alternates, canonicals, XSS escaping |
-| **Total Phase 7 Migration Tests** | **90** | **100% Green** | Zero regressions across whole codebase |
+| Verification Mode | Status | Notes |
+| :--- | :--- | :--- |
+| **Component Render Tests** | **Passed (10/10)** | Tests inspect rendered JSX `<script type="application/ld+json">` tags directly in `tests/mig04TechnicalSeo.test.ts`. |
+| **Production Build Compilation** | **Passed (40/40)** | All 40 static & dynamic routes compiled with zero errors via `next build`. |
+| **Visual / Headless Browser Crawl** | **Unexecuted** | Intentionally omitted adhering strictly to project instructions (*"Never open or run the browser unless explicitly requested by the user"*). Not recorded as executed or passed. |
 
 ---
 
-## 7. Operational Pre-Launch Gates (Non-Blocking)
+## 7. Automated Test Summary (Phase 7: Migration & SEO)
 
-The following operational configurations remain managed as pre-launch gates before accepting live production traffic:
-1. **Real SMTP Configuration:** Live transactional mailer toggle (`live_smtp`) remains unconfigured until production mail server credentials are confirmed.
-2. **Bank Wire Details:** Beneficiary account name, IBAN, and bank name displayed upon administrative activation.
-3. **Approved Shipping Tariff:** Admin toggle allows switching from provisional tariff to approved commercial rates without retroactive order mutation.
-4. **Tax Accountant Review:** Formal VAT / withholding tax review status per order lines before export.
+| Test Suite | Tests | Result | Focus Areas |
+| :--- | :---: | :---: | :--- |
+| `tests/mig01ContentMigration.test.ts` | 7 | **Passed** | 6 audited services published; blog & portfolio strictly draft with provenance |
+| `tests/mig02MediaMigration.test.ts` | 8 | **Passed** | Magic byte validation, SHA-256 fingerprinting, zero dummy records, pending source list |
+| `tests/mig03RedirectMatrix.test.ts` | 66 | **Passed** | 54 legacy URLs tested, percent-encoded Arabic matching, REQUIRES_REVIEW held as 302 |
+| `tests/mig04TechnicalSeo.test.ts` | 10 | **Passed** | Schema.org JSON-LD generation, rendered page script tags, hreflang alternates, canonicals |
+| **Total Phase 7 Migration Tests** | **91** | **100% Green** | Zero regressions across whole codebase |

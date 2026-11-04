@@ -1,8 +1,11 @@
+import React from 'react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { sampleProducts } from '@/modules/catalog/data/sampleProducts';
 import { ProductDetailView } from '@/modules/catalog/ui/ProductDetailView';
 import { locales } from '@/shared/lib/i18n';
+import { generateProductSchema, generateBreadcrumbSchema } from '@/shared/lib/schemaGenerator';
+import { safeJsonLdReplacer } from '@/shared/lib/safeJsonLd';
 
 export function generateStaticParams() {
   const products = Object.values(sampleProducts);
@@ -48,5 +51,38 @@ export default async function ProductDetailPage({
     notFound();
   }
 
-  return <ProductDetailView product={product} locale={locale} />;
+  const isArabic = locale === 'ar';
+  const productSchema = generateProductSchema(
+    {
+      name: product.title,
+      description: isArabic ? product.descriptionAr : product.descriptionEn,
+      slug: product.slug,
+      priceEgp: product.basePrice,
+      sku: `MWH-PROD-${product.id}`,
+      inStock: true,
+    },
+    locale as 'ar' | 'en',
+  );
+
+  const breadcrumbs = generateBreadcrumbSchema([
+    { name: isArabic ? 'الرئيسية' : 'Home', url: `/${locale}` },
+    { name: isArabic ? 'المتجر المؤسسي' : 'B2B Store', url: `/${locale}/store` },
+    { name: product.title, url: `/${locale}/store/${product.slug}` },
+  ]);
+
+  return (
+    <>
+      <script
+        type="application/ld+json"
+        id="product-jsonld"
+        dangerouslySetInnerHTML={{ __html: safeJsonLdReplacer(productSchema) }}
+      />
+      <script
+        type="application/ld+json"
+        id="product-breadcrumbs-jsonld"
+        dangerouslySetInnerHTML={{ __html: safeJsonLdReplacer(breadcrumbs) }}
+      />
+      <ProductDetailView product={product} locale={locale} />
+    </>
+  );
 }

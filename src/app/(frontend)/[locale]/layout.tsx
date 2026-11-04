@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { Cairo } from 'next/font/google';
@@ -6,6 +6,8 @@ import '@/styles/globals.css';
 import { Header } from '@/shared/ui/layout/Header';
 import { Footer } from '@/shared/ui/layout/Footer';
 import { locales, isValidLocale } from '@/shared/lib/i18n';
+import { generateOrganizationSchema } from '@/shared/lib/schemaGenerator';
+import { safeJsonLdReplacer } from '@/shared/lib/safeJsonLd';
 import { CartProvider } from '@/modules/cart-checkout/context/CartContext';
 import { CartDrawer } from '@/modules/cart-checkout/ui/CartDrawer';
 
@@ -61,9 +63,17 @@ export default async function FrontendLayout({
   }
 
   const dir = locale === 'ar' ? 'rtl' : 'ltr';
+  const orgSchema = generateOrganizationSchema(locale as 'ar' | 'en');
 
   return (
     <html lang={locale} dir={dir} className={cairo.variable}>
+      <head>
+        <script
+          type="application/ld+json"
+          id="organization-jsonld"
+          dangerouslySetInnerHTML={{ __html: safeJsonLdReplacer(orgSchema) }}
+        />
+      </head>
       <body className="site-layout">
         <CartProvider>
           <Header locale={locale} />
