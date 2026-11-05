@@ -1,6 +1,7 @@
 # ==============================================================================
 # MWHEBA 2.0 - Automated Disaster Recovery Backup Script (PowerShell / Windows)
-# RPO Target: <= 1 Hour | RTO Target: <= 30 Minutes
+# Current Baseline: Daily Logical Dump (RPO <= 24 Hours)
+# Note: RPO <= 1 Hour requires continuous WAL archiving (pg_receivewal) in production.
 # ==============================================================================
 
 param(

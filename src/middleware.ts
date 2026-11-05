@@ -7,8 +7,10 @@ const SECURITY_HEADERS = {
   'X-Frame-Options': 'SAMEORIGIN',
   'X-XSS-Protection': '1; mode=block',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',
+  // Safe HSTS: 30 days without includeSubDomains or preload to prevent breaking unverified agency subdomains
+  'Strict-Transport-Security': 'max-age=2592000',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+  // Baseline transitional CSP accommodating Next.js App Router and Payload Admin
   'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self'; object-src 'none'; base-uri 'self';",
 };
 

@@ -24,7 +24,7 @@ describe('REL-02: Security Audit, Upload Sanitization & Privilege Hardening', ()
       expect(res.headers.get('x-frame-options')).toBe('SAMEORIGIN');
       expect(res.headers.get('x-xss-protection')).toBe('1; mode=block');
       expect(res.headers.get('referrer-policy')).toBe('strict-origin-when-cross-origin');
-      expect(res.headers.get('strict-transport-security')).toContain('max-age=63072000');
+      expect(res.headers.get('strict-transport-security')).toContain('max-age=2592000');
       expect(res.headers.get('permissions-policy')).toContain('camera=()');
 
       const csp = res.headers.get('content-security-policy');

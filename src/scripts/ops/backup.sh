@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # MWHEBA 2.0 - Automated Disaster Recovery Backup Script
-# RPO Target: <= 1 Hour | RTO Target: <= 30 Minutes
-# Generates timestamped PostgreSQL logical backup and storage directory snapshot.
+# Current Baseline: Daily Logical Dump (RPO <= 24 Hours)
+# Note: RPO <= 1 Hour requires continuous WAL archiving (pg_receivewal) in production.
 # ==============================================================================
 
 set -euo pipefail
