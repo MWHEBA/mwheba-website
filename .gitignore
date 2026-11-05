@@ -25,6 +25,10 @@ dist/
 # Uploads & Private Files
 private-uploads/
 uploads/
+storage/
+storage_dr_test/
+backups/
+backups_dr_test/
 
 # Databases & Local Logs
 *.db
