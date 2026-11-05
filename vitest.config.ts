@@ -4,7 +4,7 @@ import path from 'path';
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.{ts,tsx}'],
-    exclude: ['poc/**', 'node_modules/**'],
+    exclude: ['node_modules/**'],
     fileParallelism: false,
     environment: 'node',
     hookTimeout: 30000,

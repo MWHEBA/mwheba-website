@@ -1,6 +1,0 @@
-node_modules
-.next
-mwheba_poc.db*
-private-uploads/
-.env.local
-dist
