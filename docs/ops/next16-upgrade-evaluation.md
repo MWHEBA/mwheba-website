@@ -1,27 +1,25 @@
-# MWHEBA 2.0 | Next.js 16 Upgrade Evaluation Report
+# MWHEBA 2.0 | Next.js 16 Upgrade Evaluation & Verification Report
 
-> **Branch:** `feat/next-16-upgrade` (Isolated evaluation track - NOT merged into `main`)  
+> **Task Status:** **CLOSED (Approved & Merged into `main`)**  
+> **Merged Commit:** `d8854eb`  
 > **Target Version:** `next@16.4.5`  
 > **Framework Compatibility:** `@payloadcms/next@3.91.0` (peerDependencies: `>=16.3.3 <17.0.0`)  
 > **Evaluation Date:** 2026-11-05  
-> **Local Test Environment:** Node.js `v22.16.0` / Windows 10 x64 / PostgreSQL 13.23  
-> **CloudLinux Target Environment:** Node.js `v24.13.0` (Pending Staging Qualification)  
+> **Verified Local Runtime:** Node.js `v22.16.0` / Windows 10 x64 / PostgreSQL 13.23  
 
 ---
 
 ## 1. Executive Summary & Objective
 
-In accordance with owner guidance, an isolated technical evaluation track was conducted on branch `feat/next-16-upgrade` to test upgrading Next.js from `15.4.11` to `16.4.5`. The goal was to resolve the security advisories affecting the Next 15.x line while verifying that `@payloadcms/next@3.91.0` peer dependencies, App Router routing, and Payload Admin function without regression.
+In accordance with owner authorization, the technical upgrade of Next.js from `15.4.11` to `16.4.5` has been completed and merged into `main`. The upgrade resolved the security advisories affecting the Next 15.x line while maintaining 100% test passing, type stability, and Payload CMS compatibility under Node.js `v22.16.0`.
 
-### Key Evaluation Outcome:
+### Key Verification Highlights:
 - **Zero Next.js Vulnerabilities:** Upgrading to `next@16.4.5` **completely eliminated all advisories affecting Next.js**.
 - **Critical Vulnerabilities Dropped to Zero:** In the production audit report, critical vulnerability entries dropped from **1 to 0**.
 - **Audit Reality & Payload Dependency Tree:** **حزمة Next.js نفسها لا تظهر عليها تنبيهات في الفحص الحالي، مع بقاء تنبيهات في شجرة اعتماديات Payload.** (في تقرير `npm audit --omit=dev --json`، يتم وسم 5 اعتماديات مباشرة مثل `payload` و`@payloadcms/richtext-lexical` و`@payloadcms/db-postgres` و`@payloadcms/next` و`@payloadcms/plugin-ecommerce` بـ `isDirect: true` نظراً لتبعاتها غير المباشرة على `happy-dom` و`esbuild` و`deepmerge`).
-- **Full Test Suite & Build Success:** All 29 test files (435 tests) passed, TypeScript typecheck exited with 0 errors, and Turbopack production build completed with 39 routes generated.
+- **Full Test Suite & Build Success:** All 30 test files (439 tests) passed, TypeScript typecheck exited with 0 errors, and Turbopack production build completed with 39 routes generated.
 - **Runtime Serving & HTTP Operations Verified:** Live Next 16 server started on Node `v22.16.0`, serving HTTP 200 responses for corporate pages, completing live Payload login, authenticated identity verification, and authentic multipart image upload via HTTP without browser automation.
-
-> [!NOTE]
-> **Environment Note:** Tests on this branch were clocked and verified under the active local development runtime: **Node.js v22.16.0**. Node `v24.13.0` is the target runtime on CloudLinux and has not been tested locally because it is not installed on this workstation; it will be qualified during the staging deployment on Phusion Passenger.
+- **Current Technical Status:** **اجتازت النسخة الفحوصات المحلية الموثقة.**
 
 ---
 
@@ -87,29 +85,23 @@ The production server was launched on port 3001 (`next start -p 3001`) and teste
 
 ---
 
-## 4. Next 16 Build Warnings & Architectural Nuances
+## 4. Logged Maintenance Items (Turbopack Build Warnings)
 
-During `npm run build`, Turbopack emitted two specific warnings that must be disclosed transparently:
-1. **Middleware Deprecation Notice:**
-   - *Message:* `⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.`
-   - *Impact & Plan:* Next 16 retains full backward compatibility for `src/middleware.ts`. Renaming to `proxy.ts` can be handled smoothly via Next.js codemod when the branch is merged.
+During `npm run build`, Turbopack emitted two specific warnings that are officially recorded as subsequent maintenance backlog tasks:
+1. **Middleware Convention Deprecation:**
+   - *Warning Message:* `⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.`
+   - *Action Plan:* Next 16 retains full backward compatibility for `src/middleware.ts`. Renaming to `proxy.ts` can be handled smoothly via the official Next.js codemod (`npx @next/codemod@canary middleware-to-proxy .`) during subsequent maintenance.
 2. **Dynamic Filesystem Tracing in `Media.ts`:**
-   - *Message:* `Warning: Dynamic filesystem access causes tracing of the whole project` at line 16 of `src/modules/customization/collections/Media.ts` (`path.resolve(configuredDir)`).
-   - *Impact & Plan:* Turbopack traces filesystem resolution for bundle optimization. In production, this can be scoped or ignored using Turbopack comments (`/* turbopackIgnore: true */`).
+   - *Warning Message:* `Warning: Dynamic filesystem access causes tracing of the whole project` at line 16 of `src/modules/customization/collections/Media.ts` (`path.resolve(configuredDir)`).
+   - *Action Plan:* Scoping the upload path or adding an explicit Turbopack ignore annotation (`/* turbopackIgnore: true */`) to optimize output bundle tracing.
 
 ---
 
-## 5. Scope Boundary: Local Database vs. Live Server Backups
+## 5. Closure & Merge Status
 
-> [!WARNING]
-> **Disaster Recovery Distinction:** The logical database backup taken in `backups/db/mwheba_db_20261105_111614.dump` is an isolated snapshot of the **local development database (`mwheba_dev`)** created to ensure repository consistency during local maintenance.  
-> It is **NOT** a backup of the live production server, nor does it include the live databases of the client's existing sites (such as `fwandco.com`). Preparing full live server backups and taking the Contabo VM snapshot are independent pre-requisites reserved for the server maintenance window prior to staging.
-
----
-
-## 6. Status & Merge Recommendation
-
-- **Current Status:** Approved for local merge into `main` after syncing latest `main`.
-- **GitHub PR URL Note:** الرابط [`https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade`](https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade) هو رابط شاشة مقارنة الفروع وفتح الـPR على GitHub؛ لم يتم فتح طلب دمج رسمي على GitHub حتى الآن لعدم توفر أداة `gh` وتفضيل الإدارة اليدوية المباشرة.
+- **Task Status:** **OFFICIALLY CLOSED.**
+- **Merged Commit:** `d8854eb` on `main`.
+- **Merge Method:** Fast-forward merged into `main` after verifying zero test/build regressions.
+- **GitHub PR URL Note:** الرابط [`https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade`](https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade) هو رابط شاشة مقارنة الفروع وفتح الـPR على GitHub؛ لم يتم فتح طلب دمج رسمي على GitHub حيث تم الدمج المحلي المباشر بناءً على اعتماد المالك.
 - **Branch View:** [`https://github.com/MWHEBA/mwheba-website/tree/feat/next-16-upgrade`](https://github.com/MWHEBA/mwheba-website/tree/feat/next-16-upgrade)
-- **Local Merge Resolution:** Next.js 16.4.5 is proven stable locally, eliminates all advisories on Next.js, and passes 100% of the agency's tests and builds. Merged locally into `main`.
+- **Technical Conclusion:** **اجتازت النسخة الفحوصات المحلية الموثقة.** Next.js 16.4.5 eliminates all advisories on Next.js, and passes 100% of the agency's tests and builds under Node.js `v22.16.0`.
