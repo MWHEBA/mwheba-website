@@ -10,11 +10,11 @@
 
 | Metric | Architectural Target | Current Implementation Reality | Status |
 |---|---|---|---|
-| **Recovery Point Objective (RPO)** | $\le 1\text{ hour}$ | $\le 24\text{ hours}$ (Daily `pg_dump`). An RPO of $\le 1\text{ hour}$ strictly requires continuous PostgreSQL WAL archiving (`pg_receivewal`), which is **not currently configured**. | **Unachieved** (Requires continuous WAL archiving) |
-| **Recovery Time Objective (RTO)** | $\le 30\text{ minutes}$ | Restore script developed, but end-to-end timing has **never been clocked on an isolated production-equivalent server**. | **Unverified** (Awaiting separate staging drill) |
-| **Offsite Backup Replication** | Automated sync to remote cloud storage | Backups are written to local `${BACKUP_DIR}` only. Offsite replication (S3/GCS/Rsync) is **not yet connected**. | **Unachieved** (Requires remote bucket configuration) |
-| **Encryption at Rest** | AES-256 encrypted snapshots | Snapshots currently use standard gzip/pg_dump compression without GPG/AES envelope encryption. | **Unachieved** (Pending staging key management) |
-| **Checksum Integrity** | SHA-256 verification | Implemented in `backup.sh` and `backup.ps1`. | **Implemented locally** |
+| **Recovery Point Objective (RPO)** | $\le 1\text{ hour}$ | $\le 24\text{ hours}$ is the architectural target of the daily backup script, but **it is only realized once automated cron scheduling is deployed in production**. An RPO of $\le 1\text{ hour}$ strictly requires continuous PostgreSQL WAL archiving (`pg_receivewal`), which is **not currently configured** and is outside the scope of daily logical dumps. | **Target for proposed schedule (WAL required for $\le 1\text{h}$)** |
+| **Recovery Time Objective (RTO)** | $\le 30\text{ minutes}$ | Restore scripts (`restore.sh`, `restore.ps1`) are verified locally via an empirical drill (clocked at 1.68s on an isolated test dataset). However, full production-scale RTO on production infrastructure remains **an unproven SLA target** until staged and measured during pre-launch rehearsals. | **Unproven Production Target (Empirical Local Drill Passed)** |
+| **Offsite Backup Replication** | Automated sync to remote cloud storage | Backups are written to local `${BACKUP_DIR}` only. Offsite replication (S3/GCS/Rsync) is **not yet connected**. | **Unachieved Target** (Requires remote bucket configuration) |
+| **Encryption at Rest** | AES-256 encrypted snapshots | Snapshots currently use standard gzip/pg_dump compression without GPG/AES envelope encryption. | **Unachieved Target** (Pending staging key management) |
+| **Checksum Integrity** | SHA-256 verification | Implemented in `backup.sh`, `backup.ps1`, and verified during the empirical drill. | **Implemented & Verified** |
 
 ---
 
@@ -108,7 +108,46 @@ SELECT 'payment_collections', count(*) FROM payment_collections;
 
 ---
 
-## 5. Unresolved Operational Gaps Prior to Launch
-1. **Isolated Restoration Drill:** An empirical drill must be executed on an independent staging machine, recording actual wall-clock duration from failure declaration to operational readiness.
-2. **Offsite Storage Hook:** Integration with S3/GCS or encrypted rsync to ensure backups survive physical host destruction.
-3. **Continuous WAL Archiving:** Setup of WAL streaming to achieve true RPO $\le 1\text{ hour}$.
+## 5. Empirical Restoration Drill on Isolated Resources
+
+An empirical backup and restore drill was executed locally using an isolated test database (`mwheba_dr_test`) and an isolated test storage directory (`storage_dr_test`), completely avoiding live/dev data.
+
+### Test Environment & Synthetic Dataset:
+- **Database:** PostgreSQL 13 on localhost:5432 (`mwheba_dr_test`).
+- **Relational Tables:**
+  - `test_customers`: 5 records with Arabic company names and unique emails.
+  - `test_orders`: 10 records with monetary values and order statuses.
+  - `test_order_lines`: 25 records with product titles, quantities, and unit prices.
+  - **Total Database Records:** 40 rows.
+- **Storage Directory (`storage_dr_test`):**
+  - `sample_invoice.pdf` (Mock PDF document)
+  - `brand_vector.svg` (Mock vector graphics asset)
+  - `bank_deposit_receipt.jpg` (Mock binary image asset)
+  - Pre-drill SHA-256 digests calculated for all 3 files.
+
+### Drill Execution & Measured Timings:
+1. **Automated Backup Run (`backup.ps1`):**
+   - **Elapsed Backup Duration:** **0.81 seconds**
+   - **Generated Database Dump:** 9,125 bytes (`.dump` custom format).
+   - **Generated Storage Archive:** 577 bytes (`.zip`).
+   - **Cryptographic Digest File:** Created and verified.
+2. **Catastrophic Failure Simulation:**
+   - Terminated connections, dropped all tables in `mwheba_dr_test`.
+   - Wiped `storage_dr_test` directory completely.
+   - Verified zero records and zero storage files remained.
+3. **Automated Restoration Run (`restore.ps1`):**
+   - Recreated database from scratch.
+   - Restored database dump via `pg_restore`.
+   - Extracted storage archive via `Expand-Archive`.
+   - **Elapsed Restoration Duration (Clocked Local RTO):** **1.68 seconds**.
+4. **Data Parity & Bitwise Validation:**
+   - **Database Parity:** 100% (5 customers, 10 orders, 25 order lines verified exactly, 40/40 records).
+   - **Storage Bitwise Parity:** 100% (All 3 file SHA-256 hashes matched pre-backup digests identically).
+
+---
+
+## 6. Unresolved Operational Gaps Prior to Launch
+1. **Full-Scale Staging Drill:** While the local script and protocol are empirically proven (1.68s on a 40-row synthetic dataset), full-scale staging verification on production data volumes (hundreds of megabytes/gigabytes) remains an operational gate.
+2. **Offsite Cloud Replication:** Automating copy to S3/GCS or remote encrypted rsync.
+3. **Continuous WAL Archiving:** Required for true continuous recovery ($\text{RPO} \le 1\text{h}$).
+4. **At-Rest Snapshot Encryption:** Adding GPG / AES encryption envelope before archive persistence.

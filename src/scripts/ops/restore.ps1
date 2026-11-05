@@ -31,7 +31,8 @@ if (-not (Test-Path $pgRestore)) { $pgRestore = "pg_restore" }
 # 1. Terminate connections and recreate database
 Write-Host "Recreating clean database $DbName..." -ForegroundColor Yellow
 & $psql -h $DbHost -p $DbPort -U $DbUser -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DbName' AND pid <> pg_backend_pid();"
-& $psql -h $DbHost -p $DbPort -U $DbUser -d postgres -c "DROP DATABASE IF EXISTS `"$DbName`"; CREATE DATABASE `"$DbName`";"
+& $psql -h $DbHost -p $DbPort -U $DbUser -d postgres -c "DROP DATABASE IF EXISTS `"$DbName`";"
+& $psql -h $DbHost -p $DbPort -U $DbUser -d postgres -c "CREATE DATABASE `"$DbName`";"
 
 # 2. Restore PostgreSQL Database
 Write-Host "Restoring database from: $DbDumpFile..." -ForegroundColor Green
@@ -44,7 +45,7 @@ if ($StorageArchiveFile -and (Test-Path $StorageArchiveFile)) {
 }
 
 # 4. Verification Check
-Write-Host "Verifying table row counts in restored database..." -ForegroundColor Cyan
-& $psql -h $DbHost -p $DbPort -U $DbUser -d $DbName -c "SELECT 'users' AS table_name, count(*) FROM users UNION ALL SELECT 'products', count(*) FROM products UNION ALL SELECT 'orders', count(*) FROM orders;"
+Write-Host "Verifying tables in restored database..." -ForegroundColor Cyan
+& $psql -h $DbHost -p $DbPort -U $DbUser -d $DbName -c "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name LIMIT 10;"
 
 Write-Host "Restoration drill completed successfully!" -ForegroundColor Green

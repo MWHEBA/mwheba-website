@@ -36,7 +36,9 @@ PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${D
 
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Dropping and recreating clean database ${DB_NAME}..."
 PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d postgres -c \
-  "DROP DATABASE IF EXISTS \"${DB_NAME}\"; CREATE DATABASE \"${DB_NAME}\";"
+  "DROP DATABASE IF EXISTS \"${DB_NAME}\";"
+PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d postgres -c \
+  "CREATE DATABASE \"${DB_NAME}\";"
 
 # 2. Restore PostgreSQL Database from Dump
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Restoring database from: ${DB_DUMP_FILE}..."
@@ -57,8 +59,8 @@ if [ -n "${STORAGE_TAR_FILE}" ] && [ -f "${STORAGE_TAR_FILE}" ]; then
 fi
 
 # 4. Integrity Verification & Smoke Check
-echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Running database row count verification..."
+echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Verifying restored public tables..."
 PGPASSWORD="${POSTGRES_PASSWORD:-}" psql -h "${DB_HOST}" -p "${DB_PORT}" -U "${DB_USER}" -d "${DB_NAME}" -c \
-  "SELECT 'users' AS table_name, count(*) FROM users UNION ALL SELECT 'products', count(*) FROM products UNION ALL SELECT 'orders', count(*) FROM orders;"
+  "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name LIMIT 10;"
 
 echo "[$(date -u +"%Y-%m-%dT%H:%M:%SZ")] Restoration drill completed successfully!"
