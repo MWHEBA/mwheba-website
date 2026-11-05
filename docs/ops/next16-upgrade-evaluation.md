@@ -16,7 +16,7 @@ In accordance with owner guidance, an isolated technical evaluation track was co
 ### Key Evaluation Outcome:
 - **Zero Next.js Vulnerabilities:** Upgrading to `next@16.4.5` **completely eliminated all advisories affecting Next.js**.
 - **Critical Vulnerabilities Dropped to Zero:** In the production audit report, critical vulnerability entries dropped from **1 to 0**.
-- **Direct Dependencies Status:** As of the 2026-11-05 audit scan, **no security advisories are registered for any direct dependency** (`next`, `payload`, `sharp`, `react`, `react-dom`, `@payloadcms/*`).
+- **Audit Reality & Payload Dependency Tree:** **حزمة Next.js نفسها لا تظهر عليها تنبيهات في الفحص الحالي، مع بقاء تنبيهات في شجرة اعتماديات Payload.** (في تقرير `npm audit --omit=dev --json`، يتم وسم 5 اعتماديات مباشرة مثل `payload` و`@payloadcms/richtext-lexical` و`@payloadcms/db-postgres` و`@payloadcms/next` و`@payloadcms/plugin-ecommerce` بـ `isDirect: true` نظراً لتبعاتها غير المباشرة على `happy-dom` و`esbuild` و`deepmerge`).
 - **Full Test Suite & Build Success:** All 29 test files (435 tests) passed, TypeScript typecheck exited with 0 errors, and Turbopack production build completed with 39 routes generated.
 - **Runtime Serving & HTTP Operations Verified:** Live Next 16 server started on Node `v22.16.0`, serving HTTP 200 responses for corporate pages, completing live Payload login, authenticated identity verification, and authentic multipart image upload via HTTP without browser automation.
 
@@ -41,10 +41,10 @@ Raw machine-readable audit reports are archived in:
 | **Moderate** | **5** (`next` cache confusion, `esbuild` dev origin) | **5** (`esbuild` dev origin) | Next.js moderate-severity advisories eliminated |
 | **Low** | **7** (`next` redirect cache poisoning, `deepmerge`) | **7** (`deepmerge` only) | Next.js low-severity advisories eliminated |
 | **Total Affected Dependency Nodes** | **16** | **15** (Transitive node effects) | **0 advisories in `next` itself** |
-| **Direct Dependencies Status** | **1 (`next@15.4.11` had advisories)** | **0 advisories registered in npm audit scan on 2026-11-05** | **Clean direct dependencies baseline** |
+| **Next.js & Direct Tree Status** | **1 (`next@15.4.11` had 30 advisories)** | **حزمة Next.js نفسها لا تظهر عليها تنبيهات، مع بقاء تنبيهات موروثة في شجرة Payload** | **Next.js fully clean; Payload upstream pending** |
 
 ### Remaining Transitive Advisories on Next 16:
-The 3 remaining packages in the production tree are all indirect dependencies:
+The 3 underlying advisory sources in the production tree are all indirect dependencies:
 1. `happy-dom` (2 High): Pulled by `@lexical/headless` in Payload RichText.
 2. `esbuild` (1 Moderate): Pulled by `drizzle-kit` in `@payloadcms/db-postgres` (build/migration tool).
 3. `deepmerge` (1 Low): Pulled by `payload@3.91.0` core (no newer upstream release published on npm).
@@ -109,8 +109,7 @@ During `npm run build`, Turbopack emitted two specific warnings that must be dis
 
 ## 6. Status & Merge Recommendation
 
-- **Current Status:** Committed and pushed to `feat/next-16-upgrade`.
-- **PR URL:** [`https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade`](https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade)
+- **Current Status:** Approved for local merge into `main` after syncing latest `main`.
+- **GitHub PR URL Note:** الرابط [`https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade`](https://github.com/MWHEBA/mwheba-website/pull/new/feat/next-16-upgrade) هو رابط شاشة مقارنة الفروع وفتح الـPR على GitHub؛ لم يتم فتح طلب دمج رسمي على GitHub حتى الآن لعدم توفر أداة `gh` وتفضيل الإدارة اليدوية المباشرة.
 - **Branch View:** [`https://github.com/MWHEBA/mwheba-website/tree/feat/next-16-upgrade`](https://github.com/MWHEBA/mwheba-website/tree/feat/next-16-upgrade)
-- **Merge Gate:** **HELD FOR OWNER REVIEW.** No merge into `main` has occurred.
-- **Recommendation:** Next.js 16.4.5 is proven stable, eliminates all direct dependency advisories in Next.js, and passes 100% of the agency's tests and builds. It is a viable production candidate when the owner approves the merge.
+- **Local Merge Resolution:** Next.js 16.4.5 is proven stable locally, eliminates all advisories on Next.js, and passes 100% of the agency's tests and builds. Merged locally into `main`.
