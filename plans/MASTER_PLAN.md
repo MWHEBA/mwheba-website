@@ -19,6 +19,8 @@
 [Phase 6: Payments & Billing]           ──► COMPLETED (Decoupled COD, courier remittance, bank review)
 [Phase 7: Content & SEO Migration]      ──► COMPLETED (5 authentic assets, 66 redirect tests, Schema)
 [Phase 8: Security & Testing]           ──► COMPLETED LOCALLY (Next 16.4.5, sharp 0.35.5, 439 tests)
+[Phase 9: Staging & Deployment]         ──► PENDING SERVER WINDOW
+[Phase 10: Marketing & Parity Revamp]   ──► PENDING OWNER APPROVAL (See plans/10-live-site-parity-and-marketing-revamp.md)
 ```
 
 ### Milestone Summary:

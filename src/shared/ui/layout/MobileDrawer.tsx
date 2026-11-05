@@ -116,7 +116,31 @@ export function MobileDrawer({
               </ul>
             </nav>
 
-            <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)' }}>
+            <div style={{ marginTop: 'auto', paddingTop: '1.25rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+              {/* Quick Contact Coordinates */}
+              <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>
+                  {locale === 'ar' ? 'ميامي، الإسكندرية، مصر' : 'Alexandria, Egypt'}
+                </span>
+                <a
+                  href="tel:+201010944010"
+                  style={{ color: 'var(--brand-primary)', fontWeight: 700, textDecoration: 'none' }}
+                >
+                  (+2) 01010944010
+                </a>
+              </div>
+
+              {/* WhatsApp direct link */}
+              <a
+                href="https://wa.me/201010944010"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn-secondary btn-sm"
+                style={{ width: '100%', justifyContent: 'center', gap: '0.5rem', color: 'var(--status-success)' }}
+              >
+                <span>{locale === 'ar' ? 'واتساب موهبة' : 'WhatsApp Us'}</span>
+              </a>
+
               <Link
                 href={otherLocaleHref}
                 className="lang-switch-btn"

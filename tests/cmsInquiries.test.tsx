@@ -598,10 +598,10 @@ describe('CMS-05: Agency Lead Capture & Inquiries Engine', () => {
       const pageJsx = await ContactPage({ params: Promise.resolve({ locale: 'ar' }) });
       const html = renderToString(pageJsx);
 
-      expect(html).toContain('قنوات التواصل المباشرة');
-      expect(html).toContain('sales@mwheba.com');
-      expect(html).toContain('القاهرة، جمهورية مصر العربية');
-      expect(html).toContain('طلب استشارة أو عرض أسعار');
+      expect(html).toContain('بيانات التواصل والمقر');
+      expect(html).toContain('info@mwheba.com');
+      expect(html).toContain('الإسكندرية');
+      expect(html).toContain('نموذج تسجيل استفسار مشروع');
     });
   });
 });

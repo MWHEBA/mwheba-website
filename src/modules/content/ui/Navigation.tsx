@@ -16,16 +16,18 @@ export async function getBilingualNavigation(locale: string): Promise<{
   const defaultHeader: NavLinkItem[] = isArabic
     ? [
         { href: '/ar', label: 'الرئيسية' },
-        { href: '/ar/store', label: 'المتجر والمنتجات' },
         { href: '/ar/services', label: 'الخدمات' },
+        { href: '/ar/about', label: 'عن موهبة' },
+        { href: '/ar/store', label: 'المتجر والمنتجات' },
         { href: '/ar/portfolio', label: 'أعمالنا' },
         { href: '/ar/blog', label: 'المدونة' },
         { href: '/ar/contact', label: 'تواصل معنا' },
       ]
     : [
         { href: '/en', label: 'Home' },
-        { href: '/en/store', label: 'Store & Merchandise' },
         { href: '/en/services', label: 'Services' },
+        { href: '/en/about', label: 'About Us' },
+        { href: '/en/store', label: 'Store & Merchandise' },
         { href: '/en/portfolio', label: 'Portfolio' },
         { href: '/en/blog', label: 'Insights' },
         { href: '/en/contact', label: 'Contact' },
