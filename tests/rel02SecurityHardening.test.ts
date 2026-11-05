@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { NextRequest } from 'next/server';
 import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
-import { middleware } from '@/middleware';
+import { proxy as middleware } from '@/proxy';
 import { validateArtworkFile, sanitizeFilename } from '@/modules/customization/lib/fileValidation';
 import { recordCodCollection } from '@/modules/payments/services/codSettlementService';
 import { verifyArtworkDownloadToken } from '@/modules/customization/lib/privateStorage';

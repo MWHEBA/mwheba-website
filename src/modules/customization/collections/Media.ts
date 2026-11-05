@@ -13,7 +13,7 @@ if (
   throw new Error('PRIVATE_UPLOAD_DIR must be an absolute path outside public_html in production.');
 }
 
-export const privateUploadDir = path.resolve(configuredDir);
+export const privateUploadDir = path.resolve(/* turbopackIgnore: true */ configuredDir);
 
 export const Media: CollectionConfig = {
   slug: 'media',

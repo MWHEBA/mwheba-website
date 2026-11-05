@@ -4,7 +4,7 @@ import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { parseRedirectCsv, type RedirectEntry } from '../src/scripts/migration/compileRedirectMap';
 import { edgeRedirectEngine, normalizePath } from '../src/modules/redirects/edgeRedirectEngine';
-import { middleware } from '../src/middleware';
+import { proxy as middleware } from '../src/proxy';
 
 describe('MIG-03: Edge Redirect Engine & 4-Tier URL Status Governance', () => {
   const csvPath = path.resolve(process.cwd(), 'docs/audit/05-redirect-map.csv');

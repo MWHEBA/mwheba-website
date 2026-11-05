@@ -23,7 +23,7 @@ function applySecurityHeaders(response: NextResponse): NextResponse {
   return response;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
   const evaluation = edgeRedirectEngine.evaluate(pathname, search);
@@ -59,6 +59,9 @@ export function middleware(request: NextRequest) {
   const response = NextResponse.next();
   return applySecurityHeaders(response);
 }
+
+// Backward-compatibility alias for test runners and legacy consumers
+export const middleware = proxy;
 
 export const config = {
   matcher: [
