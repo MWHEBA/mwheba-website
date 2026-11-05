@@ -52,12 +52,12 @@ All local application development, business logic, security hardening, content m
 
 Following the comprehensive cleanup cycle, all obsolete, intermediate, and duplicate files were pruned. The remaining documentation represents the authoritative living records:
 
-### 3.1 Architectural Contracts & Specifications
-- [`PROJECT_SPEC.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/PROJECT_SPEC.md): Core functional specification and business requirements.
-- [`ARCHITECTURE.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/ARCHITECTURE.md): System architecture, monolith boundaries, and security model.
-- [`DATA_MODEL.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/DATA_MODEL.md): Relational schemas, collections, fields, and access policies.
-- [`QUALITY_GATES.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/QUALITY_GATES.md): Enforced verification rules and acceptance thresholds.
-- [`DECISIONS.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/DECISIONS.md): Architectural decision records (ADRs).
+### 3.1 Architectural Contracts & Specifications (`docs/specs/`)
+- [`docs/specs/PROJECT_SPEC.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/specs/PROJECT_SPEC.md): Core functional specification and business requirements.
+- [`docs/specs/ARCHITECTURE.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/specs/ARCHITECTURE.md): System architecture, monolith boundaries, and security model.
+- [`docs/specs/DATA_MODEL.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/specs/DATA_MODEL.md): Relational schemas, collections, fields, and access policies.
+- [`docs/specs/QUALITY_GATES.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/specs/QUALITY_GATES.md): Enforced verification rules and acceptance thresholds.
+- [`docs/specs/DECISIONS.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/specs/DECISIONS.md): Architectural decision records (ADRs).
 - [`plans/MASTER_PLAN.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/plans/MASTER_PLAN.md): Authoritative execution ledger, ADR matrix, risk mitigations, and phase roadmap.
 
 ### 3.2 Operational Runbooks & Handover (`docs/`)

@@ -1,24 +1,23 @@
-# MWHEBA 2.0 | Project Root Documentation
+# MWHEBA 2.0 | Advertising & Media Agency Platform
 
-This folder contains the root-level Markdown source of truth for planning the full MWHEBA website rebuild and integrated B2B store.
+A modern, high-performance web platform uniting MWHEBA Agency's corporate presence, bilingual marketing, and fixed-price B2B digital service packages with an e-commerce catalog for physical corporate merchandise.
 
-## Files
-- `AGENTS.md`: mandatory agent behavior and first task.
-- `PROJECT_SPEC.md`: business goals, features and constraints.
-- `ARCHITECTURE.md`: conditional technical architecture and boundaries.
-- `DATA_MODEL.md`: conceptual entities and invariants.
-- `IMPLEMENTATION_ROADMAP.md`: execution phases and expected plan outputs.
-- `QUALITY_GATES.md`: acceptance criteria and launch gates.
-- `DECISIONS.md`: confirmed and unresolved decisions.
+## Technical Stack
+- **Framework:** Next.js `16.4.5` (App Router + Turbopack)
+- **CMS & Backend:** Payload CMS `3.91.0` (embedded under `/admin`)
+- **Database:** PostgreSQL 16+
+- **Styling:** Calm minimal corporate design system with flat colors via `:root` CSS variables (full RTL/LTR bilingual support)
+- **Runtime Target:** Node.js 24.13.0+ LTS / Phusion Passenger on CloudLinux
 
-## How to use in Google Antigravity
-1. Copy **all eight `.md` files** into the repository root.
-2. Open the repository in Antigravity.
-3. Start a new agent conversation and paste:
+## Project Documentation Structure
+- **Execution & Status:** [`plans/MASTER_PLAN.md`](plans/MASTER_PLAN.md) & [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md)
+- **Operations & Runbooks:** [`docs/ops/OPERATIONS_MANUAL.md`](docs/ops/OPERATIONS_MANUAL.md)
+- **Security Audit:** [`docs/ops/production-dependencies-audit.md`](docs/ops/production-dependencies-audit.md)
+- **Client Admin Guide:** [`docs/handover/admin-guide.md`](docs/handover/admin-guide.md)
+- **Specifications & ADRs:** Located in [`docs/specs/`](docs/specs/) (`PROJECT_SPEC.md`, `ARCHITECTURE.md`, `DATA_MODEL.md`, `QUALITY_GATES.md`, `DECISIONS.md`)
+- **Active Data Assets:** [`docs/audit/05-redirect-map.csv`](docs/audit/05-redirect-map.csv) (301 redirect matrix)
 
-> Read `AGENTS.md` first, then read all referenced root Markdown files. Work in PLAN ONLY mode. Inspect the repository read-only, then create the detailed phase plans under `plans/` exactly as instructed. Start with the master plan and blocking Payload Ecommerce POC. Do not install dependencies, write application code, or modify existing files outside `plans/` until I approve.
-
-4. Review `plans/00-master-plan.md` and `plans/02-commerce-feasibility-poc.md` before allowing implementation.
-
-## Important
-The chosen stack is a **preferred candidate, not a proven implementation**. Payload Ecommerce must pass the feasibility POC before production development.
+## Verification
+- `npm test`: Runs the automated test suite (30 test files / 439 tests)
+- `npx tsc --noEmit`: Strict TypeScript compilation check
+- `npm run build`: Production build with Turbopack
