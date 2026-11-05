@@ -58,23 +58,17 @@ Following the comprehensive cleanup cycle, all obsolete, intermediate, and dupli
 - [`DATA_MODEL.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/DATA_MODEL.md): Relational schemas, collections, fields, and access policies.
 - [`QUALITY_GATES.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/QUALITY_GATES.md): Enforced verification rules and acceptance thresholds.
 - [`DECISIONS.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/DECISIONS.md): Architectural decision records (ADRs).
-- [`IMPLEMENTATION_ROADMAP.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/IMPLEMENTATION_ROADMAP.md): High-level milestone roadmap.
+- [`plans/MASTER_PLAN.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/plans/MASTER_PLAN.md): Authoritative execution ledger, ADR matrix, risk mitigations, and phase roadmap.
 
-### 3.2 Operational Runbooks (`docs/ops/`)
+### 3.2 Operational Runbooks & Handover (`docs/`)
+- [`docs/ops/OPERATIONS_MANUAL.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/OPERATIONS_MANUAL.md): Unified operational manual covering pre-launch cutover, disaster recovery, rollback procedures, RBAC matrix, and transactional emails.
 - [`docs/ops/production-dependencies-audit.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/production-dependencies-audit.md): Complete supply-chain audit, Next 16 verification, sharp 0.35.5, and triage of remaining transitive notices.
-- [`docs/ops/disaster-recovery.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/disaster-recovery.md): Local backup & restore runbook, drill execution logs, and realistic RPO/RTO expectations.
-- [`docs/ops/rbac-matrix-and-runbook.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/rbac-matrix-and-runbook.md): User roles, permission matrices, and security procedures.
-- [`docs/ops/transactional-email-templates.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/transactional-email-templates.md): Specifications for all 5 customer and staff transactional email notifications.
-- [`docs/ops/cutover-and-reconciliation.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/cutover-and-reconciliation.md): Production cutover sequence and financial ledger reconciliation.
-- [`docs/ops/rollback-runbook.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/ops/rollback-runbook.md): Reversion procedures in case of staging or production deployment failures.
+- [`docs/handover/admin-guide.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/handover/admin-guide.md): Client administration and content management guide.
 
-### 3.3 Historical Syntheses & Active Data Assets
-- [`docs/poc/feasibility-report.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/poc/feasibility-report.md): Consolidated Master Report for the Phase 1 Commerce POC.
-- [`docs/audit/LEGACY_AUDIT_SUMMARY.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/audit/LEGACY_AUDIT_SUMMARY.md): Consolidated Executive Summary of the legacy WordPress audit.
+### 3.3 Active Legacy Data Assets (`docs/audit/`)
 - [`docs/audit/05-redirect-map.csv`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/audit/05-redirect-map.csv): **Active Runtime Data Asset** consumed by `compileRedirectMap.ts` and tested by `mig03RedirectMatrix.test.ts`.
 - [`docs/audit/02-url-inventory.csv`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/audit/02-url-inventory.csv): Discovered legacy URL catalog.
 - [`docs/audit/03-content-and-media-audit.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/audit/03-content-and-media-audit.md): Citations for authentic copy and media assets.
-- [`docs/handover/admin-guide.md`](file:///c:/Users/UTD/Desktop/MWHEBA%20Agency/docs/handover/admin-guide.md): Client administration and content management guide.
 
 ---
 

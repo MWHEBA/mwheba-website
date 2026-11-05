@@ -25,8 +25,8 @@
 
 | Phase | Core Objective | Key Deliverables & Enforcements | Verification & Proof | Status |
 |---|---|---|---|---|
-| **Phase 0** | Legacy Audit & Inventory | 54 legacy URLs cataloged, 4-tier action matrix, asset provenance. | `docs/audit/LEGACY_AUDIT_SUMMARY.md`, `05-redirect-map.csv` | **COMPLETED** |
-| **Phase 1** | Commerce Feasibility POC | Evaluated candidate stacks; rejected plugin; approved custom Payload collections. | 12/12 blocking scenarios passed; `docs/poc/feasibility-report.md` | **COMPLETED** |
+| **Phase 0** | Legacy Audit & Inventory | 54 legacy URLs cataloged, 4-tier action matrix, asset provenance. | `docs/audit/05-redirect-map.csv`, `docs/PROJECT_STATUS.md` | **COMPLETED** |
+| **Phase 1** | Commerce Feasibility POC | Evaluated candidate stacks; rejected plugin; approved custom Payload collections. | 12/12 blocking scenarios passed; Section 3 ADRs | **COMPLETED** |
 | **Phase 2** | Monolith Foundation | Next.js App Router, Payload embedded at `/admin`, PostgreSQL migrations, RBAC. | `tests/rbac.test.ts`, clean CI installation direct from lockfile | **COMPLETED** |
 | **Phase 3** | Design System & UX | Calm corporate styling, CSS variables in `:root`, flat colors, zero gradients, RTL/LTR. | `tests/components.test.tsx`, `tests/commerceTemplates.test.tsx` | **COMPLETED** |
 | **Phase 4** | CMS & Corporate Site | Dynamic corporate pages, portfolio, blog, honeypot lead forms, transactional emails. | `tests/cms*.test.tsx` (all passing) | **COMPLETED** |
