@@ -1,4 +1,5 @@
 import { buildConfig } from 'payload';
+import sharp from 'sharp';
 import { lineHasCustomization, customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
 import { postgresAdapter } from '@payloadcms/db-postgres';
 import { lexicalEditor } from '@payloadcms/richtext-lexical';
@@ -35,6 +36,7 @@ const dbUri = process.env.DATABASE_URI || 'postgres://postgres@127.0.0.1:5432/mw
 const isPostgres = dbUri.startsWith('postgres://') || dbUri.startsWith('postgresql://');
 
 export default buildConfig({
+  sharp,
   secret: process.env.PAYLOAD_SECRET || 'mwheba-dev-foundation-secret-key-32chars-min',
   admin: {
     user: Users.slug,
