@@ -149,6 +149,8 @@ export function BlogListingView({ locale, posts }: BlogListingViewProps) {
             return (
               <article
                 key={post.id}
+                className="blog-card reveal-on-scroll"
+                data-aos="fade-up-sm"
                 data-testid={`blog-card-${post.slug}`}
                 style={{
                   backgroundColor: 'var(--bg-surface)',

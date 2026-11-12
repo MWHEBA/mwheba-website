@@ -5,6 +5,7 @@ import {
   LinkedInIcon,
   BehanceIcon,
   TwitterXIcon,
+  ArrowUpRightIcon,
 } from '@/shared/ui/icons';
 
 interface FooterProps {
@@ -16,26 +17,32 @@ export function Footer({ locale }: FooterProps) {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="site-footer" role="contentinfo">
-      <div className="site-footer-inner">
-        {/* Column 1: Agency Brand */}
-        <div>
-          <div style={{ marginBlockEnd: '1.25rem' }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/brand/logo-wide-inverted.webp"
-              alt={isArabic ? 'وكالة موهبة للدعاية والإنتاج' : 'MWHEBA Agency'}
-              height={34}
-              style={{ height: '34px', width: 'auto', display: 'block' }}
-            />
+    <footer className="footer site-footer reveal-on-scroll" data-aos="fade-up-sm" role="contentinfo">
+      <div className="container" style={{ maxWidth: '1480px' }}>
+        {/* 1. Top Section: Positioning & Social Channels */}
+        <div className="footer-top">
+          <div>
+            <div className="eyebrow">
+              {isArabic ? 'فكر إبداعي. أثر ملموس.' : 'CREATIVE THINKING. TANGIBLE IMPACT.'}
+            </div>
+            <p className="footer-tagline">
+              {isArabic
+                ? 'استوديو إبداعي مستقل وشريك معتمد لتوريد هدايا ومطبوعات الشركات الفاخرة في مصر والشرق الأوسط.'
+                : 'Independent creative agency & corporate merchandise studio serving forward-thinking enterprises.'}
+            </p>
+            <div className="footer-contact-strip">
+              <span>{isArabic ? 'ميامي، شارع إسكندر إبراهيم، الإسكندرية، مصر' : 'Miami, Iskander Ibrahim St., Alexandria, Egypt'}</span>
+              <span>·</span>
+              <a href="tel:+201010944010" dir="ltr">01010944010</a>
+              <span>-</span>
+              <a href="tel:+201229609292" dir="ltr">01229609292</a>
+              <span>·</span>
+              <a href="mailto:info@mwheba.com">info@mwheba.com</a>
+              <span>·</span>
+              <span>{isArabic ? 'الأحد - الخميس | 10:00 ص - 6:00 م' : 'Sun - Thu | 10:00 AM - 6:00 PM'}</span>
+            </div>
           </div>
-          <p style={{ color: 'var(--text-inverted-muted)', fontSize: '0.875rem', lineHeight: '1.7', margin: 0 }}>
-            {isArabic
-              ? 'وكالة رائدة متخصصة في بناء الهويات التجارية، تطوير المنصات الرقمية، توريد وتصنيع هدايا الشركات والمطبوعات الدعائية المخصصة.'
-              : 'Premier corporate agency specialized in brand identity, digital platforms, corporate giveaways, and customized commercial merchandise.'}
-          </p>
 
-          {/* Official Social Media Channels */}
           <div className="footer-social-links" aria-label={isArabic ? 'قنوات التواصل الاجتماعي الرسمية' : 'Official Social Channels'}>
             <a
               href="https://www.facebook.com/mwhebaeg"
@@ -85,128 +92,124 @@ export function Footer({ locale }: FooterProps) {
           </div>
         </div>
 
-        {/* Column 2: Core Services */}
-        <div>
-          <h3 className="footer-col-title">
-            {isArabic ? 'خدماتنا الست' : 'Our 6 Disciplines'}
-          </h3>
-          <ul className="footer-links">
-            <li>
-              <Link href={isArabic ? '/ar/services/brand-identity' : '/en/services/brand-identity'}>
-                {isArabic ? 'هوية العلامة التجارية' : 'Brand Identity'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/services/web-development' : '/en/services/web-development'}>
-                {isArabic ? 'استضافة وتطوير المواقع' : 'Web Development'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/services/ui-ux-design' : '/en/services/ui-ux-design'}>
-                {isArabic ? 'تصميم واجهة المستخدم UI/UX' : 'UI/UX Design'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/services/digital-marketing' : '/en/services/digital-marketing'}>
-                {isArabic ? 'التسويق الرقمي واستراتيجيات النمو' : 'Digital Marketing'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/services/media-production' : '/en/services/media-production'}>
-                {isArabic ? 'الإنتاج الإعلامي والمرئي' : 'Media Production'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/services/printing' : '/en/services/printing'}>
-                {isArabic ? 'الطباعة وهدايا الشركات' : 'Printing & Merchandise'}
-              </Link>
-            </li>
-          </ul>
+        {/* 2. Structured Link Columns (Disciplines & Corporate Navigation) */}
+        <div className="footer-links-grid">
+          <div>
+            <h3 className="footer-col-title">
+              {isArabic ? 'مجالات العمل الست' : 'Our 6 Disciplines'}
+            </h3>
+            <ul className="footer-nav-list">
+              <li>
+                <Link href={isArabic ? '/ar/services/brand-identity' : '/en/services/brand-identity'}>
+                  {isArabic ? 'هوية العلامة التجارية' : 'Brand Identity'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/services/web-development' : '/en/services/web-development'}>
+                  {isArabic ? 'استضافة وتطوير المواقع' : 'Web Development'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/services/ui-ux-design' : '/en/services/ui-ux-design'}>
+                  {isArabic ? 'تصميم واجهة المستخدم UI/UX' : 'UI/UX Design'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/services/digital-marketing' : '/en/services/digital-marketing'}>
+                  {isArabic ? 'التسويق الرقمي واستراتيجيات النمو' : 'Digital Marketing'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/services/media-production' : '/en/services/media-production'}>
+                  {isArabic ? 'الإنتاج الإعلامي والمرئي' : 'Media Production'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/services/printing' : '/en/services/printing'}>
+                  {isArabic ? 'الطباعة وهدايا الشركات' : 'Printing & Merchandise'}
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 className="footer-col-title">
+              {isArabic ? 'الاستوديو والمنتجات' : 'Studio & Corporate Store'}
+            </h3>
+            <ul className="footer-nav-list">
+              <li>
+                <Link href={isArabic ? '/ar/services' : '/en/services'}>
+                  {isArabic ? 'مركز الخدمات الرئيسي' : 'Services Overview'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/store' : '/en/store'}>
+                  {isArabic ? 'متجر هدايا الشركات (B2B)' : 'Corporate Store (B2B)'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/portfolio' : '/en/portfolio'}>
+                  {isArabic ? 'معرض الأعمال والمشاريع' : 'Selected Work'}
+                </Link>
+              </li>
+              <li>
+                <a href="#process">
+                  {isArabic ? 'منهجية العمل' : 'How It Works'}
+                </a>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/blog' : '/en/blog'}>
+                  {isArabic ? 'المقالات والأفكار' : 'Insights & Articles'}
+                </Link>
+              </li>
+            </ul>
+          </div>
+
+          <div>
+            <h3 className="footer-col-title">
+              {isArabic ? 'المؤسسة والشفافية' : 'Company & Legal'}
+            </h3>
+            <ul className="footer-nav-list">
+              <li>
+                <Link href={isArabic ? '/ar/about' : '/en/about'}>
+                  {isArabic ? 'عن موهبة وفريق العمل' : 'About MWHEBA'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/contact' : '/en/contact'}>
+                  {isArabic ? 'تواصل معنا واستشرنا' : 'Contact & Inquiries'}
+                </Link>
+              </li>
+              <li>
+                <Link href={isArabic ? '/ar/privacy-policy' : '/en/privacy-policy'}>
+                  {isArabic ? 'سياسة الخصوصية والشروط' : 'Privacy Policy & Terms'}
+                </Link>
+              </li>
+              <li>
+                <Link href="/admin">
+                  {isArabic ? 'بوابة إدارة المحتوى' : 'Admin Portal'}
+                </Link>
+              </li>
+            </ul>
+          </div>
         </div>
 
-        {/* Column 3: Corporate Merchandise & About */}
-        <div>
-          <h3 className="footer-col-title">
-            {isArabic ? 'روابط هامة' : 'Quick Links'}
-          </h3>
-          <ul className="footer-links">
-            <li>
-              <Link href={isArabic ? '/ar/about' : '/en/about'}>
-                {isArabic ? 'عن موهبة وقصتنا' : 'About MWHEBA'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/services' : '/en/services'}>
-                {isArabic ? 'مركز الخدمات الرئيسي' : 'Services Hub'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/store' : '/en/store'}>
-                {isArabic ? 'متجر هدايا الشركات (B2B)' : 'B2B Merchandise Store'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/portfolio' : '/en/portfolio'}>
-                {isArabic ? 'أعمالنا ومشاريعنا' : 'Client Case Studies'}
-              </Link>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/blog' : '/en/blog'}>
-                {isArabic ? 'المدونة ومقالات النمو' : 'Insights & Articles'}
-              </Link>
-            </li>
-          </ul>
-        </div>
+        {/* 3. Monumental Brand Headline (From mwheba-visual-redesign-v6-smooth.html) */}
+        <h2 className="display footer-brand-display">
+          MWHEBA<span style={{ color: 'var(--color-brand-red)' }}>.</span>
+        </h2>
 
-        {/* Column 4: Contact & Legal */}
-        <div>
-          <h3 className="footer-col-title">
-            {isArabic ? 'المقر والتواصل المباشر' : 'Headquarters & Contact'}
-          </h3>
-          <ul className="footer-links">
-            <li>
-              <span style={{ color: 'var(--text-inverted-muted)', fontSize: '0.875rem' }}>
-                {isArabic ? 'ميامي، شارع إسكندر إبراهيم، الإسكندرية، مصر.' : 'Miami, Iskander Ibrahim St., Alexandria, Egypt.'}
-              </span>
-            </li>
-            <li>
-              <a href="tel:+201010944010" style={{ color: 'var(--text-inverted)', fontWeight: 600 }}>
-                (+2) 01010944010 - 01229609292
-              </a>
-            </li>
-            <li>
-              <a href="mailto:info@mwheba.com">
-                info@mwheba.com
-              </a>
-            </li>
-            <li>
-              <span style={{ color: 'var(--text-inverted-muted)', fontSize: '0.8125rem' }}>
-                {isArabic ? 'الأحد - الخميس | 10:00 ص - 6:00 م' : 'Sun - Thu | 10:00 AM - 6:00 PM'}
-              </span>
-            </li>
-            <li>
-              <Link href={isArabic ? '/ar/privacy-policy' : '/en/privacy-policy'}>
-                {isArabic ? 'سياسة الخصوصية والشروط' : 'Privacy & Terms'}
-              </Link>
-            </li>
-          </ul>
-        </div>
-      </div>
-
-      <div className="site-footer-bottom">
-        <div>
-          © {currentYear} {isArabic ? 'وكالة موهبة للدعاية والإنتاج. جميع الحقوق محفوظة.' : 'MWHEBA Agency. All rights reserved.'}
-        </div>
-        <div style={{ display: 'flex', gap: '1.25rem' }}>
-          <Link href={isArabic ? '/ar' : '/en'}>
-            {isArabic ? 'الرئيسية' : 'Home'}
-          </Link>
-          <Link href={isArabic ? '/en' : '/ar'}>
-            {isArabic ? 'English Version' : 'النسخة العربية'}
-          </Link>
-          <Link href="/admin">
-            {isArabic ? 'لوحة الإدارة' : 'Admin Portal'}
-          </Link>
+        {/* 4. Elegant Minimal Bottom Bar */}
+        <div className="footer-bottom">
+          <span>
+            © {currentYear} {isArabic ? 'وكالة موهبة للدعاية والإنتاج. جميع الحقوق محفوظة.' : 'MWHEBA Agency. All rights reserved.'}
+          </span>
+          <span className="footer-bottom-tag">
+            DESIGNED TO MAKE AN IMPACT · ALEXANDRIA, EGYPT
+          </span>
+          <a href="#top" className="footer-back-to-top">
+            {isArabic ? 'العودة للأعلى ↑' : 'BACK TO TOP ↑'}
+          </a>
         </div>
       </div>
     </footer>

@@ -99,12 +99,15 @@ describe('Phase 10.1: Homepage Parity & Agency Corporate Marketing Suite', () =>
     expect(html).toContain('الإطلاق الفني والتسليم والقياس');
   });
 
-  it('renders the high-impact conversion CTA banner', async () => {
+  it('renders the high-impact conversion CTA banner with interactive inquiry form', async () => {
     const component = await HomePage({ params: Promise.resolve({ locale: 'ar' }) });
     const html = renderToString(component);
 
-    expect(html).toContain('قم بتحويل علامتك التجارية اليوم!');
-    expect(html).toContain('تواصل مع فريقنا الآن');
-    expect(html).toContain('استعرض متجر الهدايا (B2B)');
+    expect(html).toContain("07 / LET&#x27;S MAKE SOMETHING");
+    expect(html).toContain('HAVE AN');
+    expect(html).toContain('REAL');
+    expect(html).toContain('id="inquiry"');
+    expect(html).toContain('id="clientName"');
+    expect(html).toContain('id="clientEmail"');
   });
 });

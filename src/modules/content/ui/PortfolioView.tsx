@@ -136,6 +136,8 @@ export function PortfolioView({ locale, projects }: PortfolioViewProps) {
             return (
               <article
                 key={project.id}
+                className="portfolio-card reveal-on-scroll"
+                data-aos="fade-up-sm"
                 data-testid={`portfolio-card-${project.slug}`}
                 style={{
                   backgroundColor: 'var(--bg-surface)',

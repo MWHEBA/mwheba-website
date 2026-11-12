@@ -48,6 +48,14 @@ Do not write application code, install dependencies, initialize frameworks, modi
 - Log assumptions separately from confirmed facts; raise blockers rather than guessing.
 - Avoid one giant generation prompt. Plan first, then implement by approved tickets.
 
+## Visual and UI Design Rules
+- Subtle gradients are permitted in backgrounds (e.g. radial/linear lighting blooms, studio depth, atmospheric section backdrops matching approved mockups).
+- Colors must be declared in `:root` CSS variables (never hardcode arbitrary hex/rgb directly across components).
+- Do not change project fonts (preserve `Cairo` / system typography).
+- Keep design calm, minimal, elegant, and corporate studio-grade.
+- Avoid unnecessary animations or loud effects; keep transitions subtle.
+- Never open or run the browser unless explicitly requested by the user.
+
 ## Required response format after planning
 1. Repository assessment
 2. Recommended execution order

@@ -10,6 +10,7 @@ import { generateOrganizationSchema } from '@/shared/lib/schemaGenerator';
 import { safeJsonLdReplacer } from '@/shared/lib/safeJsonLd';
 import { CartProvider } from '@/modules/cart-checkout/context/CartContext';
 import { CartDrawer } from '@/modules/cart-checkout/ui/CartDrawer';
+import { ScrollRevealProvider, SmoothScrollProvider } from '@/shared/ui/studio';
 
 const cairo = Cairo({
   subsets: ['arabic', 'latin'],
@@ -76,10 +77,14 @@ export default async function FrontendLayout({
       </head>
       <body className="site-layout">
         <CartProvider>
-          <Header locale={locale} />
-          <main className="site-main">{children}</main>
-          <Footer locale={locale} />
-          <CartDrawer locale={locale} />
+          <SmoothScrollProvider>
+            <ScrollRevealProvider>
+              <Header locale={locale} />
+              <main className="site-main">{children}</main>
+              <Footer locale={locale} />
+              <CartDrawer locale={locale} />
+            </ScrollRevealProvider>
+          </SmoothScrollProvider>
         </CartProvider>
       </body>
     </html>

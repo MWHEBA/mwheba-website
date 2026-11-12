@@ -32,7 +32,7 @@ export function ProductListingGrid({ locale }: ProductListingGridProps) {
   return (
     <div className="container" style={{ paddingBlock: '3.5rem 6rem' }}>
       {/* PLP Header */}
-      <header style={{ marginBottom: '2.5rem' }}>
+      <header className="reveal-on-scroll" data-aos="fade-up-sm" style={{ marginBottom: '2.5rem' }}>
         <span style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-muted)' }}>
           {isArabic ? 'كتالوج المنتجات والخدمات المؤسسية' : 'ENTERPRISE CATALOG & GIVEAWAYS'}
         </span>
@@ -122,6 +122,8 @@ export function ProductListingGrid({ locale }: ProductListingGridProps) {
           return (
             <article
               key={product.id}
+              className="store-product-card reveal-on-scroll"
+              data-aos="fade-up-sm"
               style={{
                 borderRadius: 'var(--radius-md)',
                 border: '1px solid var(--border-default)',
