@@ -3,33 +3,17 @@
 This file is the primary instruction file for Google Antigravity and any coding agent operating in this repository.
 
 ## Read order (mandatory)
-1. `PROJECT_SPEC.md`
-2. `ARCHITECTURE.md`
-3. `DATA_MODEL.md`
-4. `IMPLEMENTATION_ROADMAP.md`
-5. `QUALITY_GATES.md`
-6. `DECISIONS.md`
+1. `docs/PROJECT_STATUS.md`
+2. `docs/specs/PROJECT_SPEC.md`
+3. `docs/specs/ARCHITECTURE.md`
+4. `docs/specs/DATA_MODEL.md`
+5. `plans/MASTER_PLAN.md`
+6. `docs/specs/QUALITY_GATES.md`
+7. `docs/specs/DECISIONS.md`
 
-## Current mode: PLAN ONLY
-Do not write application code, install dependencies, initialize frameworks, modify infrastructure, or run migrations until the project owner explicitly approves an implementation plan.
-
-## First assignment
-1. Inspect the repository without modifying files.
-2. Identify existing code, configuration, environment constraints, and potential conflicts.
-3. Read all six documents listed above.
-4. Produce an executable breakdown as Markdown under `plans/`:
-   - `plans/00-master-plan.md`
-   - `plans/01-discovery-and-audit.md`
-   - `plans/02-commerce-feasibility-poc.md`
-   - `plans/03-foundation.md`
-   - `plans/04-design-system.md`
-   - `plans/05-cms-and-corporate-site.md`
-   - `plans/06-commerce-and-b2b.md`
-   - `plans/07-payments-and-billing.md`
-   - `plans/08-migration-and-seo.md`
-   - `plans/09-security-testing-launch.md`
-5. For each plan include: goal, dependencies, scope, out-of-scope, concrete tasks, files/modules likely affected, data changes, acceptance criteria, tests, risks, effort estimate, rollback, and owner approval gates.
-6. Present the master plan and unresolved decisions for approval. Do not implement yet.
+## Current mode: IMPLEMENTATION & MAINTENANCE
+Phases 0–8, Phase 10 (Live Site Parity), and the Corporate Studio UI Redesign are implemented and verified locally.
+Active work covers frontend/UI refinements, design-system polish, maintenance, and preparing owner-gated pre-launch items. Always build in small, reviewable slices and verify with `npx tsc --noEmit` and `npm test`.
 
 ## Agent rules
 - Never invent framework capabilities, API methods, payment fees, legal requirements, or integration support. Verify against the installed package version and official docs.
@@ -55,14 +39,6 @@ Do not write application code, install dependencies, initialize frameworks, modi
 - Keep design calm, minimal, elegant, and corporate studio-grade.
 - Avoid unnecessary animations or loud effects; keep transitions subtle.
 - Never open or run the browser unless explicitly requested by the user.
-
-## Required response format after planning
-1. Repository assessment
-2. Recommended execution order
-3. POC pass/fail criteria
-4. Proposed `plans/` files
-5. Open questions requiring owner decision
-6. Explicit statement: `Awaiting approval to implement`
 
 <!-- BEGIN:nextjs-agent-rules -->
 
