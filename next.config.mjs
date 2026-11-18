@@ -6,6 +6,7 @@ const nextConfig = {
   trailingSlash: false,
   reactStrictMode: true,
   poweredByHeader: false,
+  allowedDevOrigins: ['127.0.0.1'],
   async rewrites() {
     return [
       {
