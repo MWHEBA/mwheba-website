@@ -3,20 +3,33 @@
 import React, { useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useCart } from '../context/CartContext';
-import { sampleProducts } from '@/modules/catalog/data/sampleProducts';
 import { Badge } from '@/shared/ui/primitives';
+import { stockNotice } from '../logic/stockNotice';
 
 interface CartDrawerProps {
   locale: string;
 }
+
+const availabilityMessagesAr: Record<string, string> = {
+  PRODUCT_UNAVAILABLE: 'هذا المنتج غير متاح حالياً.',
+  VARIANT_UNAVAILABLE: 'هذا الخيار غير متاح حالياً.',
+  VARIANT_MISMATCH: 'هذا الخيار لم يعد متاحاً لهذا المنتج.',
+  VARIANT_REQUIRED: 'اختر أحد الخيارات المتاحة لهذا المنتج.',
+  PRICE_UNAVAILABLE: 'سعر هذا الصنف غير متاح حالياً.',
+  CUSTOMIZATION_UNAVAILABLE: 'هذا المنتج لا يقبل إرفاق ملفات الطباعة.',
+  INVALID_QUANTITY: 'أدخل كمية صحيحة بالوحدات.',
+};
 
 export function CartDrawer({ locale }: CartDrawerProps) {
   const isArabic = locale === 'ar';
   const {
     items,
     calculation,
+    isLoading,
+    error,
     isCartOpen,
     closeCart,
+    refreshCart,
     updateQuantity,
     removeItem,
   } = useCart();
@@ -50,7 +63,13 @@ export function CartDrawer({ locale }: CartDrawerProps) {
 
   if (!isCartOpen) return null;
 
-  const checkoutHref = isArabic ? '/ar/checkout' : '/en/checkout';
+  const storefront = isArabic ? '/ar' : '/en';
+  const checkoutHref = `${storefront}/checkout`;
+  const currency = new Intl.NumberFormat(isArabic ? 'ar-EG' : 'en-EG', {
+    style: 'currency',
+    currency: 'EGP',
+  });
+  const shortages = Object.values(calculation.productStatuses).filter((status) => !status.isSatisfied);
 
   return (
     <div
@@ -138,12 +157,9 @@ export function CartDrawer({ locale }: CartDrawerProps) {
           </button>
         </header>
 
-        {/* MOQ Shortage Warning Banners (Displayed ONLY if MOQ is not yet satisfied) */}
-        {Object.values(calculation.productStatuses).some((s) => !s.isSatisfied) && (
+        {shortages.length > 0 && (
           <div style={{ padding: '0.875rem 1.5rem', borderBottom: '1px solid var(--border-subtle)' }}>
-            {Object.values(calculation.productStatuses)
-              .filter((status) => !status.isSatisfied)
-              .map((status) => (
+            {shortages.map((status) => (
                 <div
                   key={status.productId}
                   style={{
@@ -176,26 +192,44 @@ export function CartDrawer({ locale }: CartDrawerProps) {
 
         {/* Line Items List */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '1rem 1.5rem' }}>
-          {items.length === 0 ? (
+          {isLoading && (
+            <p role="status">
+              {isArabic
+                ? (items.length ? 'جارٍ تحديث السلة…' : 'جارٍ تحميل السلة…')
+                : (items.length ? 'Updating your cart…' : 'Loading your cart…')}
+            </p>
+          )}
+          {error && (
+            <div style={{ marginBlockEnd: '1rem' }}>
+              <p role="alert" style={{ color: 'var(--status-error)' }}>
+                {isArabic
+                  ? 'تعذّر تحديث السلة. أعد تحميلها للتحقق من آخر التغييرات.'
+                  : 'Could not update your cart. Reload it to check the latest changes.'}
+              </p>
+              <button type="button" className="btn-secondary" onClick={() => void refreshCart()} disabled={isLoading}>
+                {isArabic ? 'إعادة تحميل السلة' : 'Reload cart'}
+              </button>
+            </div>
+          )}
+          {items.length === 0 && !isLoading && !error && (
             <div style={{ textAlign: 'center', paddingBlock: '3rem', color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: '2.5rem', marginBottom: '0.5rem' }}>🛒</div>
               <p style={{ margin: 0, fontSize: '0.9375rem' }}>
                 {isArabic ? 'سلة الطلبات فارغة حالياً' : 'Your cart is currently empty'}
               </p>
+              <Link href={`${storefront}/store`} onClick={closeCart} className="btn-secondary" style={{ marginBlockStart: '1rem' }}>
+                {isArabic ? 'تصفّح المتجر' : 'Browse the store'}
+              </Link>
             </div>
-          ) : (
+          )}
+          {items.length > 0 && (
             <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              {items.map((line: any) => {
-                const sample = sampleProducts[line.productId];
-                const title = line.productTitle || sample?.title || `منتج #${line.productId}`;
-                const variantName = line.variantTitle || line.variantName;
+              {items.map((line) => {
+                const variantName = line.variantTitle;
                 const hasPrinting = Boolean(line.artworkAssetId || line.printingNotes);
-                const printingFeeTotal =
-                  line.lineCustomizationFee ??
-                  (hasPrinting ? (sample?.customizationFee || 0) * line.quantity : 0);
-                const lineTotal =
-                  line.lineTotal ??
-                  ((sample?.basePrice || 0) * line.quantity + printingFeeTotal);
+                const printingFeeTotal = line.lineCustomizationFee;
+                const lineTotal = line.lineTotal;
+                const productHref = `${storefront}/store/${encodeURIComponent(line.productSlug)}`;
+                const unavailable = Boolean(line.availabilityError);
 
                 return (
                   <li
@@ -210,18 +244,26 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                       <div>
                         <h4 style={{ margin: '0 0 0.25rem', fontSize: '0.9375rem', fontWeight: 700, color: 'var(--brand-primary-dark)' }}>
-                          {title}
+                          {line.productSlug
+                            ? <Link href={productHref} onClick={closeCart}>{line.productTitle}</Link>
+                            : line.productTitle}
                         </h4>
                         {variantName && (
                           <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
                             {isArabic ? 'الخيار:' : 'Variant:'} {variantName}
                           </div>
                         )}
+                        {line.sku && (
+                          <div style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+                            {isArabic ? 'رمز المنتج' : 'SKU'} <bdi>{line.sku}</bdi>
+                          </div>
+                        )}
                       </div>
 
                       <button
                         type="button"
-                        onClick={() => removeItem(line.id)}
+                        onClick={() => void removeItem(line.id).catch(() => undefined)}
+                        disabled={isLoading}
                         aria-label={isArabic ? 'حذف العنصر' : 'Remove item'}
                         style={{
                           background: 'none',
@@ -235,6 +277,29 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                         {isArabic ? 'حذف' : 'Remove'}
                       </button>
                     </div>
+
+                    {unavailable && (
+                      <div style={{ color: 'var(--status-warning)', fontSize: '0.875rem', marginBlockStart: '0.625rem' }}>
+                        <p>
+                          {isArabic
+                            ? availabilityMessagesAr[line.availabilityError?.split(':')[0] ?? ''] ?? 'هذا الصنف غير متاح حالياً.'
+                            : line.availabilityError?.replace(/^[A-Z_]+: /, '')}
+                          {' '}
+                          {isArabic ? 'احذف الصنف للمتابعة.' : 'Remove this item to continue.'}
+                        </p>
+                        {line.productSlug && (
+                          <Link href={productHref} onClick={closeCart}>
+                            {isArabic ? 'عرض خيارات المنتج' : 'View product options'}
+                          </Link>
+                        )}
+                      </div>
+                    )}
+
+                    {line.stockIssue && (
+                      <p style={{ color: 'var(--status-warning)', fontSize: '0.875rem', marginBlockStart: '0.625rem' }}>
+                        {stockNotice(line.stockIssue, isArabic ? 'ar' : 'en')}
+                      </p>
+                    )}
 
                     {/* Attached Customization Indicator */}
                     {hasPrinting && (
@@ -275,7 +340,9 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                         <button
                           type="button"
-                          onClick={() => updateQuantity(line.id, -1)}
+                          onClick={() => void updateQuantity(line.id, -1).catch(() => undefined)}
+                          disabled={isLoading || unavailable}
+                          aria-label={isArabic ? 'تقليل الكمية' : 'Decrease quantity'}
                           style={{
                             width: '28px',
                             height: '28px',
@@ -294,7 +361,9 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                         </span>
                         <button
                           type="button"
-                          onClick={() => updateQuantity(line.id, 1)}
+                          onClick={() => void updateQuantity(line.id, 1).catch(() => undefined)}
+                          disabled={isLoading || unavailable}
+                          aria-label={isArabic ? 'زيادة الكمية' : 'Increase quantity'}
                           style={{
                             width: '28px',
                             height: '28px',
@@ -311,16 +380,19 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                       </div>
 
                       {/* Item Total */}
-                      <div style={{ textAlign: isArabic ? 'left' : 'right' }}>
+                      {!unavailable && <div style={{ textAlign: 'end' }}>
                         <div style={{ fontWeight: 700, color: 'var(--brand-primary-dark)', fontSize: '0.9375rem' }}>
-                          {lineTotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}
+                          {currency.format(lineTotal)}
                         </div>
-                        {hasPrinting && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          {isArabic ? 'سعر الوحدة' : 'Unit price'} {currency.format(line.unitPrice)}
+                        </div>
+                        {printingFeeTotal > 0 && (
                           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                            {isArabic ? `يشمل ${printingFeeTotal} ج.م طباعة` : `incl. ${printingFeeTotal} EGP print`}
+                            {isArabic ? 'رسوم الطباعة' : 'Printing fee'} {currency.format(printingFeeTotal)}
                           </div>
                         )}
-                      </div>
+                      </div>}
                     </div>
                   </li>
                 );
@@ -330,7 +402,7 @@ export function CartDrawer({ locale }: CartDrawerProps) {
         </div>
 
         {/* Drawer Footer & Checkout Action */}
-        <footer
+        {items.length > 0 && <footer
           style={{
             padding: '1.25rem 1.5rem',
             borderTop: '1px solid var(--border-default)',
@@ -341,13 +413,13 @@ export function CartDrawer({ locale }: CartDrawerProps) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem', fontSize: '0.875rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
               <span>{isArabic ? 'إجمالي المنتجات الأساسية:' : 'Base Products Total:'}</span>
-              <span>{calculation.subtotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
+              <span>{currency.format(calculation.subtotal)}</span>
             </div>
 
             {calculation.totalCustomizationFees > 0 && (
               <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--text-secondary)' }}>
                 <span>{isArabic ? 'رسوم الطباعة والحفر (بند مستقل):' : 'Customization Fees (Separate):'}</span>
-                <span>{calculation.totalCustomizationFees.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
+                <span>{currency.format(calculation.totalCustomizationFees)}</span>
               </div>
             )}
 
@@ -364,11 +436,11 @@ export function CartDrawer({ locale }: CartDrawerProps) {
               }}
             >
               <span>{isArabic ? 'الإجمالي التقديري للدفع:' : 'Estimated Total:'}</span>
-              <span>{calculation.grandTotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
+              <span>{currency.format(calculation.grandTotal)}</span>
             </div>
           </div>
 
-          {/* Checkout CTA or MOQ Blocking Notice */}
+          {/* Checkout is available when the current server summary permits it. */}
           {calculation.canCheckout ? (
             <Link
               href={checkoutHref}
@@ -384,41 +456,26 @@ export function CartDrawer({ locale }: CartDrawerProps) {
                 boxShadow: 'var(--shadow-card)',
               }}
             >
-              {isArabic ? 'متابعة إتمام الطلب المؤسسي ←' : 'Proceed to B2B Checkout →'}
+              {isArabic ? 'متابعة إتمام الطلب' : 'Proceed to checkout'}
             </Link>
           ) : (
-            <div>
-              <button
-                type="button"
-                disabled
-                className="btn-primary"
-                style={{
-                  width: '100%',
-                  paddingBlock: '0.85rem',
-                  opacity: 0.5,
-                  cursor: 'not-allowed',
-                  fontWeight: 700,
-                  borderRadius: 'var(--radius-sm)',
-                }}
-              >
-                {isArabic ? 'متابعة إتمام الطلب (مغلق لعدم اكتمال الحد الأدنى)' : 'Proceed to Checkout (Locked: MOQ Not Met)'}
-              </button>
-              <p
-                style={{
-                  margin: '0.5rem 0 0',
-                  fontSize: '0.75rem',
-                  color: 'var(--status-warning)',
-                  textAlign: 'center',
-                  fontWeight: 600,
-                }}
-              >
-                {isArabic
-                  ? 'يجب إكمال 10 قطع على الأقل لكل صنف لتفعيل الدفع'
-                  : 'At least 10 units required per product to unlock checkout'}
-              </p>
-            </div>
+            <button
+              type="button"
+              disabled
+              className="btn-primary"
+              style={{
+                width: '100%',
+                paddingBlock: '0.85rem',
+                opacity: 0.5,
+                cursor: 'not-allowed',
+                fontWeight: 700,
+                borderRadius: 'var(--radius-sm)',
+              }}
+            >
+              {isArabic ? 'متابعة إتمام الطلب' : 'Proceed to checkout'}
+            </button>
           )}
-        </footer>
+        </footer>}
       </aside>
     </div>
   );

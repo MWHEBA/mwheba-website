@@ -1,5 +1,7 @@
 import type { GlobalConfig } from 'payload';
+import { isDeepStrictEqual } from 'node:util';
 import { hasRole } from '../../identity/access/roles';
+import { validatePilotFulfillment } from '../services/checkoutFulfillment';
 
 export interface TariffSchedule {
   tariffStatus: 'provisional' | 'owner_approved';
@@ -19,6 +21,7 @@ export interface CommerceSettingsData {
   otherGovernoratesFee: number;
   officePickupFee: number;
   standardFallbackFee: number;
+  pilotFulfillment?: unknown;
   productionPolicy: ProductionPolicy;
   emailDispatchMode: 'deferred_review' | 'live_smtp';
   smtpHost?: string | null;
@@ -56,7 +59,23 @@ export const CommerceSettings: GlobalConfig = {
   fields: [
     {
       type: 'collapsible',
-      label: 'Delivery Tariff Schedule (D-015)',
+      label: 'Pilot Delivery and Pickup',
+      fields: [
+        {
+          name: 'pilotFulfillment',
+          type: 'json',
+          label: 'Pilot coverage and rates',
+          validate: validatePilotFulfillment,
+          admin: {
+            description: 'Edit the pilot JSON using status, public approval reference, and delivery and/or pickup. Courier rows use regionCode (for example EG-C), amount in EGP, and codAllowed. Pickup uses id, amount, codAllowed, and label, address and instructions with ar and en text. Set courierRemittanceEnabled to true only with merchant approval for finance to reconcile courier deposits. Save as owner_approved only after the merchant approves every enabled option. Clear this field to disable all physical fulfillment.',
+          },
+        },
+      ],
+    },
+    {
+      type: 'collapsible',
+      label: 'Legacy Tariff Schedule (D-015)',
+      admin: { description: 'Historical settings retained for existing operational records. Configure live checkout in Pilot Delivery and Pickup.' },
       fields: [
         {
           name: 'tariffStatus',
@@ -216,7 +235,7 @@ export const CommerceSettings: GlobalConfig = {
           );
         }
 
-        if (!originalDoc) return data;
+        const previous = originalDoc ?? {};
         const changes: string[] = [];
         const trackFields = [
           'tariffStatus',
@@ -237,10 +256,18 @@ export const CommerceSettings: GlobalConfig = {
         ] as const;
 
         for (const f of trackFields) {
-          if (data[f] !== undefined && data[f] !== originalDoc[f]) {
-            changes.push(`${f}: ${originalDoc[f]} -> ${data[f]}`);
+          if (data[f] !== undefined && data[f] !== previous[f]) {
+            changes.push(`${f}: ${previous[f]} -> ${data[f]}`);
           }
         }
+
+        if (data.pilotFulfillment !== undefined
+          && !isDeepStrictEqual(data.pilotFulfillment ?? null, previous.pilotFulfillment ?? null)) {
+          changes.push(`pilotFulfillment: ${JSON.stringify(previous.pilotFulfillment ?? null)} -> ${JSON.stringify(data.pilotFulfillment ?? null)}`);
+        }
+
+        const changeLog = Array.isArray(previous.changeLog) ? previous.changeLog : [];
+        data.changeLog = changeLog;
 
         if (changes.length > 0) {
           const userStr = req?.user ? `user:#${req.user.id}` : 'system';
@@ -250,7 +277,7 @@ export const CommerceSettings: GlobalConfig = {
             changesSummary: changes.join(', '),
           };
           data.changeLog = [
-            ...(Array.isArray(originalDoc.changeLog) ? originalDoc.changeLog : []),
+            ...changeLog,
             newEntry,
           ];
         }

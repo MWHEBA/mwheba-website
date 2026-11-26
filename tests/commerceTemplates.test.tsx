@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { sampleProducts } from '@/modules/catalog/data/sampleProducts';
+import type { PublicCatalogProductDetail } from '@/modules/catalog/services/publishedCatalog';
 import { ProductDetailView } from '@/modules/catalog/ui/ProductDetailView';
 import { CartDrawer } from '@/modules/cart-checkout/ui/CartDrawer';
 import { CheckoutView } from '@/modules/cart-checkout/ui/CheckoutView';
@@ -10,43 +11,65 @@ import { calculateCartState } from '@/modules/cart-checkout/logic/moqEngine';
 
 describe('DES-04: Commerce Interaction Templates (PDP, Cart Drawer, Checkout)', () => {
   describe('ProductDetailView (PDP)', () => {
-    it('renders physical product details with MOQ notice and volume discount tiers', () => {
-      const product = sampleProducts['flask-01'];
+    const product: PublicCatalogProductDetail = {
+      id: 101,
+      title: 'Executive flask',
+      slug: 'executive-flask',
+      description: 'Stainless steel insulated flask',
+      productType: 'physical',
+      minOrderQuantity: 10,
+      basePrice: 250,
+      price: 250,
+      category: null,
+      enableVariants: false,
+      media: [{ id: 31, url: '/test-catalog/flask.png', alt: 'Executive flask', width: 400, height: 400 }],
+      sku: 'FLASK-101',
+      allowArtworkUpload: true,
+      customizationFee: 25,
+      variants: [],
+    };
+
+    it('renders Arabic product details, gallery, MOQ and file input', () => {
       const html = renderToString(
         <CartProvider>
-          <ProductDetailView product={product} locale="ar" />
+          <ProductDetailView product={{ ...product, title: 'كوب حراري مخصص' }} locale="ar" />
         </CartProvider>
       );
 
-      // Verify title & badges
-      expect(html).toContain('كوب حراري ذكي مخصص');
-      expect(html).toContain('الحد الأدنى: 10 قطع');
-
-      // Verify volume discount tier labels
-      expect(html).toContain('10 - 49');
-      expect(html).toContain('50 - 99');
-      expect(html).toContain('100+');
-
-      // Verify logo upload dropzone exists
-      expect(html).toContain('تخصيص الهوية والشعار المؤسسي');
-      expect(html).toContain('اضغط لاختيار الشعار أو اسحبه هنا');
-
-      // Verify specifications table
-      expect(html).toContain('المواصفات الفنية والمؤسسية');
-      expect(html).toContain('فولاذ 316 آمن غذائياً');
+      expect(html).toContain('كوب حراري مخصص');
+      expect(html).toContain('الحد الأدنى للطلب');
+      expect(html).toContain('الطباعة والشعار (اختياري)');
+      expect(html).toContain('type="file"');
+      expect(html).toContain('src="/test-catalog/flask.png"');
+      expect(html).toContain('FLASK-101');
     });
 
-    it('renders English version with LTR guidance and correct currency strings', () => {
-      const product = sampleProducts['flask-01'];
+    it('renders English variant options with real IDs, prices and availability', () => {
+      const variable: PublicCatalogProductDetail = {
+        ...product,
+        sku: null,
+        enableVariants: true,
+        variants: [
+          { id: 601, title: 'Blue', sku: 'FLASK-BLUE', price: 250, options: [], media: [] },
+          { id: 602, title: 'Black', sku: 'FLASK-BLACK', price: 275, options: [], media: [] },
+          { id: 603, title: 'Silver', sku: null, price: null, options: [], media: [] },
+        ],
+      };
+
       const html = renderToString(
         <CartProvider>
-          <ProductDetailView product={product} locale="en" />
+          <ProductDetailView product={variable} locale="en" />
         </CartProvider>
       );
 
-      expect(html).toContain('MOQ: 10 units');
-      expect(html).toContain('Corporate Branding &amp; Artwork (Optional)');
-      expect(html).toContain('Add to Corporate Cart');
+      expect(html).toContain('Minimum order of 10 units');
+      expect(html).toContain('Printing and artwork (optional)');
+      expect(html).toContain('Choose a variant');
+      const markup = html.replaceAll('<!-- -->', '');
+      expect(markup).toMatch(/<option value="601">Blue[^<]*250/);
+      expect(markup).toMatch(/<option value="602">Black[^<]*275/);
+      expect(markup).toContain('<option value="603" disabled="">Silver (Unavailable)</option>');
+      expect(html).toContain('Add to cart');
       expect(html).toContain('EGP');
     });
   });
@@ -109,7 +132,7 @@ describe('DES-04: Commerce Interaction Templates (PDP, Cart Drawer, Checkout)', 
   });
 
   describe('CheckoutView (B2B Checkout & Fulfillment)', () => {
-    it('renders 2-column B2B checkout with company fields and delivery toggles in Arabic', () => {
+    it('renders Arabic checkout sections before delivery and payment options are quoted', () => {
       const html = renderToString(
         <CartProvider>
           <CheckoutView locale="ar" />
@@ -121,20 +144,16 @@ describe('DES-04: Commerce Interaction Templates (PDP, Cart Drawer, Checkout)', 
       expect(html).toContain('اسم الشركة / المؤسسة');
       expect(html).toContain('اسم المسؤول التنفيذي');
 
-      // Delivery method options
-      expect(html).toContain('شحن وتوصيل لمقر الشركة');
-      expect(html).toContain('استلام مباشر من مقر وكالة موهبة');
-
-      // Payment method options (aligned with D-007 and D-008)
-      expect(html).toContain('تحويل بنكي رسمي للشركات');
-      expect(html).toContain('الدفع عند الاستلام (COD للبضائع المادية)');
-      expect(html).toContain('بوابة الدفع الإلكتروني (Paymob)');
+      expect(html).not.toContain('name="delivery"');
+      expect(html).toContain('طريقة السداد المالي');
+      expect(html).not.toContain('name="payment"');
+      expect(html).not.toContain('تحويل بنكي رسمي للشركات');
 
       // Immutable Order summary
       expect(html).toContain('ملخص أمر الشراء المعتمد');
     });
 
-    it('renders 2-column B2B checkout with delivery toggles in English', () => {
+    it('renders English checkout sections before delivery and payment options are quoted', () => {
       const html = renderToString(
         <CartProvider>
           <CheckoutView locale="en" />
@@ -142,11 +161,12 @@ describe('DES-04: Commerce Interaction Templates (PDP, Cart Drawer, Checkout)', 
       );
 
       expect(html).toContain('Corporate Entity Details');
-      expect(html).toContain('Corporate Courier Delivery');
-      expect(html).toContain('Pickup from MWHEBA Agency Office');
-      expect(html).toContain('Corporate Bank Transfer');
-      expect(html).toContain('Cash on Delivery (COD for Physical Goods)');
-      expect(html).toContain('Online Payment (Paymob Gateway)');
+      expect(html).toContain('Delivery Method');
+      expect(html).not.toContain('name="delivery"');
+      expect(html).toContain('Payment Method');
+      expect(html).not.toContain('name="payment"');
+      expect(html).not.toContain('Corporate Bank Transfer');
+      expect(html).not.toContain('Cash on Delivery');
       expect(html).toContain('Immutable Order Summary');
     });
   });

@@ -1,27 +1,20 @@
-import { NextRequest } from 'next/server';
-import { handlePaymentRequest } from '@/modules/payments/http';
-import { recordCodCollection } from '@/modules/payments/services/codSettlementService';
+import { handleCodRequest } from '@/modules/payments/codHttp';
+import { getCodOrderSettlement, recordCodCollection } from '@/modules/payments/services/codSettlementService';
 
-/** POST /api/payments/cod/collect - operations, finance, or super_admin */
-export async function POST(req: NextRequest) {
-  return handlePaymentRequest(req, async ({ payload, user, body }) => {
-    if (!user) {
-      const err = new Error('UNAUTHORIZED: Authentication required to record cash collection.');
-      (err as any).statusCode = 401;
-      throw err;
-    }
-    const result = await recordCodCollection(payload, {
-      orderId: body.orderId,
-      collectedAmount: Number(body.collectedAmount),
-      collectorType: body.collectorType,
-      collectorName: body.collectorName,
-      receiptReference: body.receiptReference,
-      collectedAt: body.collectedAt,
-      actor: {
-        id: user.id,
-        roles: Array.isArray(user.roles) ? user.roles : [],
-      },
-    });
-    return result;
-  });
+export async function GET(req: Request) {
+  const orderId = new URL(req.url).searchParams.get('orderId');
+  return handleCodRequest(req, (payload, actor) => getCodOrderSettlement(payload, orderId, actor));
+}
+
+export async function POST(req: Request) {
+  return handleCodRequest(req, (payload, actor, body) => recordCodCollection(payload, {
+    orderId: body.orderId,
+    collectedAmount: body.collectedAmount,
+    currency: body.currency,
+    collectorType: body.collectorType,
+    collectorName: body.collectorName,
+    receiptReference: body.receiptReference,
+    collectedAt: body.collectedAt,
+    actor,
+  }));
 }

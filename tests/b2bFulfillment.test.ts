@@ -1,3 +1,4 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { readFile, rm } from 'node:fs/promises';
 import React, { act } from 'react';
@@ -7,6 +8,7 @@ import { sql } from '@payloadcms/db-postgres';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -111,9 +113,10 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
       cartId: cart.id,
       guestSecret: cart.secret,
       customer: { email, password, companyName: 'Fulfillment Test Corp', contactPerson: 'Buyer', phone: '+201012345678' },
-      delivery: delivery as any,
+      delivery: { ...delivery, ...confirmedTestDelivery(quote) },
       paymentMethod: opts.paymentMethod ?? 'bank_transfer',
       expectedGrandTotal: quote.grandTotal,
+      expectedQuoteConfirmation: quote.confirmation,
     });
     cleanup.orders.push(result.order.id);
     cleanup.users.push(result.customerId);
@@ -158,8 +161,10 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
     return { asset, absolutePath: saved.absolutePath };
   };
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, { bankTransfer: true });
 
     flask = await payload.create({
       collection: 'products',
@@ -175,6 +180,7 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', flask.id);
     service = await payload.create({
       collection: 'products',
       data: {
@@ -208,6 +214,7 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     const del = async (collection: string, id: any, context?: any) => {
       try {
         await payload.delete({ collection, id, context });
@@ -791,8 +798,10 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
       const originalWindow = global.window;
       const originalDocument = global.document;
       const originalFetch = global.fetch;
+      const originalSelf = globalThis.self;
       global.window = window as any;
       global.document = document as any;
+      globalThis.self = globalThis as typeof globalThis.self;
 
       const { orderId, jobs, customerToken, customer } = await placeOrder({ items: [{ product: service.id, quantity: 1 }] });
       const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -870,6 +879,7 @@ describe('B2B-05: Operations Fulfillment Engine & Service Intake Workflow', () =
         global.window = originalWindow;
         global.document = originalDocument;
         global.fetch = originalFetch;
+        globalThis.self = originalSelf;
       }
     });
   });

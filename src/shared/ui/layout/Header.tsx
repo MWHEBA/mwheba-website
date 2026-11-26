@@ -1,9 +1,11 @@
 import Link from 'next/link';
+import { LocaleSwitchLink } from './LocaleSwitchLink';
 import { MobileDrawer } from './MobileDrawer';
 import { StickyHeaderWrapper } from './StickyHeaderWrapper';
 import { CartButton } from '@/modules/cart-checkout/ui/CartButton';
 import { getBilingualNavigation } from '@/modules/content/ui/Navigation';
-import { PhoneIcon, MapPinIcon, WhatsAppIcon, ArrowUpRightIcon } from '@/shared/ui/icons';
+import { PhoneIcon, MapPinIcon, WhatsAppIcon, ArrowUpRightIcon, UsersIcon } from '@/shared/ui/icons';
+import styles from '@/modules/identity/ui/account.module.css';
 
 interface HeaderProps {
   locale: string;
@@ -16,6 +18,8 @@ export async function Header({ locale }: HeaderProps) {
   const otherLocaleHref = isArabic ? '/en' : '/ar';
   const otherLocaleLabel = isArabic ? 'English' : 'العربية';
   const homeHref = isArabic ? '/ar' : '/en';
+  const accountLink = { href: `/${locale}/account`, label: isArabic ? 'حسابي' : 'My account' };
+  const mobileItems = navItems.some((item) => item.href === accountLink.href) ? navItems : [...navItems, accountLink];
 
   return (
     <>
@@ -92,15 +96,19 @@ export async function Header({ locale }: HeaderProps) {
 
             {/* Right Actions: Lang Switch, Cart Button, Dark CTA, and Mobile Menu */}
             <div className="navright">
-              <Link
+              <LocaleSwitchLink
                 href={otherLocaleHref}
                 className="small-btn"
                 aria-label={isArabic ? 'التبديل إلى الإنجليزية' : 'Switch to Arabic'}
               >
                 {otherLocaleLabel}
-              </Link>
+              </LocaleSwitchLink>
 
               <CartButton locale={locale} />
+
+              <Link href={accountLink.href} className={`small-btn ${styles.headerAccount}`} aria-label={accountLink.label} prefetch={false}>
+                <UsersIcon size={16} aria-hidden="true" />
+              </Link>
 
               <Link
                 href={isArabic ? '/ar/contact' : '/en/contact'}
@@ -112,7 +120,7 @@ export async function Header({ locale }: HeaderProps) {
 
               <MobileDrawer
                 locale={locale}
-                items={navItems}
+                items={mobileItems}
                 otherLocaleHref={otherLocaleHref}
                 otherLocaleLabel={otherLocaleLabel}
               />

@@ -1,5 +1,9 @@
-import type { Payload } from 'payload';
+import { APIError, type Payload } from 'payload';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
+import type { Cart } from '@/payload-types';
+import { defaultLocale, type Locale } from '@/shared/lib/i18n';
+import { catalogLocale, catalogSelectionError } from '@/modules/catalog/services/catalogProduct';
 import {
   calculateCartSummary,
   hydrateCartLines,
@@ -7,6 +11,60 @@ import {
 } from './cartCalculator';
 
 export const CART_COOKIE_NAME = 'mwheba_cart';
+const RETIRED_CART_OPERATION_PREFIX = '__mwheba_cart_merged__:';
+export const CART_OPERATION_WINDOW = 50;
+
+export type CartItem = NonNullable<Cart['items']>[number];
+
+export function cartRelationId(relation: number | { id: number } | null | undefined) {
+  return typeof relation === 'object' && relation !== null ? relation.id : relation;
+}
+
+export function sameCartLine(left: CartItem, right: Omit<CartItem, 'quantity'>) {
+  const productId = cartRelationId(left.product);
+  return productId != null && productId === cartRelationId(right.product) &&
+    (cartRelationId(left.variant) ?? null) === (cartRelationId(right.variant) ?? null) &&
+    (left.artworkAssetId ?? '') === (right.artworkAssetId ?? '') &&
+    (left.printingNotes ?? '') === (right.printingNotes ?? '');
+}
+
+export function retireCartOperations(cart: Pick<Cart, 'appliedOperations'>, destinationId: number) {
+  return [`${RETIRED_CART_OPERATION_PREFIX}${destinationId}`, ...parseAppliedOperations(cart.appliedOperations)];
+}
+
+export function isRetiredCart(cart: Pick<Cart, 'appliedOperations'>, destinationId?: number) {
+  const operations = parseAppliedOperations(cart.appliedOperations);
+  return destinationId === undefined
+    ? operations.some((operation) => operation.startsWith(RETIRED_CART_OPERATION_PREFIX))
+    : operations.includes(`${RETIRED_CART_OPERATION_PREFIX}${destinationId}`);
+}
+
+function assertCartIsEditable(cart: Cart) {
+  if (cart.purchasedAt || isRetiredCart(cart)) {
+    throw new APIError('CART_NOT_ACTIVE: This cart can no longer be edited.', 409, undefined, true);
+  }
+}
+
+function mutationKey(operationKey: string) {
+  if (typeof operationKey !== 'string' || !operationKey.trim()) {
+    throw new APIError('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.', 400, undefined, true);
+  }
+  const key = operationKey.trim();
+  if (key.startsWith(RETIRED_CART_OPERATION_PREFIX)) throw new APIError('INVALID_OPERATION_KEY', 400, undefined, true);
+  return key;
+}
+
+export async function assertCartArtworkOwnership(payload: Payload, cart: Cart, assetId: string) {
+  const numericId = Number(assetId);
+  const asset = Number.isSafeInteger(numericId) && numericId > 0 ? await payload.findByID({
+    collection: 'artwork-assets', id: numericId, depth: 0, disableErrors: true,
+  }) : null;
+  if (!asset) throw new APIError('ARTWORK_NOT_FOUND', 422, undefined, true);
+  const uploader = cartRelationId(asset.uploader);
+  if (cartRelationId(asset.cart) === cart.id || asset.ownerSession === String(cart.id) ||
+    (uploader != null && uploader === cartRelationId(cart.customer))) return;
+  throw new APIError('FORBIDDEN_ARTWORK_ACCESS', 403, undefined, true);
+}
 
 export interface CartMutationItem {
   productId: number | string;
@@ -22,7 +80,7 @@ export interface CartLockContext {
   markSaved: () => void;
 }
 
-export function parseAppliedOperations(field: any): string[] {
+export function parseAppliedOperations(field: unknown): string[] {
   if (Array.isArray(field)) {
     return field.filter((k): k is string => typeof k === 'string' && Boolean(k.trim()));
   }
@@ -39,9 +97,9 @@ export function parseAppliedOperations(field: any): string[] {
   return [];
 }
 
-export function appendAppliedOperation(newOpKey: string, existingOpsField: any): string[] {
+export function appendAppliedOperation(newOpKey: string, existingOpsField: unknown): string[] {
   const existing = parseAppliedOperations(existingOpsField);
-  return [newOpKey, ...existing.filter((k) => k !== newOpKey)].slice(0, 50);
+  return [newOpKey, ...existing.filter((k) => k !== newOpKey)].slice(0, CART_OPERATION_WINDOW);
 }
 
 export function matchesCartItem(it: any, idx: number, itemId: string): boolean {
@@ -198,7 +256,7 @@ export async function getOrCreateCart(
   payload: Payload,
   cartId?: number | null,
   customerId?: number | null
-): Promise<any> {
+): Promise<Cart & { secret?: string }> {
   if (cartId && Number.isSafeInteger(cartId) && cartId > 0) {
     try {
       const existing = await payload.findByID({
@@ -207,8 +265,8 @@ export async function getOrCreateCart(
         depth: 0,
       });
       // Return existing cart if not yet completed / purchased
-      if (existing && !existing.purchasedAt) {
-        return existing;
+      if (existing && !existing.purchasedAt && !isRetiredCart(existing)) {
+        return { ...existing, secret: existing.secret ?? undefined };
       }
     } catch {
       // Cart not found, create new
@@ -227,7 +285,7 @@ export async function getOrCreateCart(
     depth: 0,
   });
 
-  return newCart;
+  return { ...newCart, secret: newCart.secret ?? undefined };
 }
 
 /**
@@ -239,74 +297,15 @@ export async function getOrCreateCart(
 export async function addItemToCart(
   payload: Payload,
   cartId: number,
-  item: CartMutationItem
+  item: CartMutationItem,
+  locale: Locale = defaultLocale,
 ): Promise<CartCalculationSummary> {
   const qty = Number(item.quantity);
   if (!Number.isSafeInteger(qty) || qty <= 0) {
-    throw new Error('INVALID_QUANTITY: Quantity must be a positive whole integer.');
+    throw new APIError('INVALID_QUANTITY: Quantity must be a positive whole integer.', 422, undefined, true);
   }
 
-  let numericProductId = Number(item.productId);
-  let product: any = null;
-
-  if (Number.isSafeInteger(numericProductId) && numericProductId > 0) {
-    product = await payload.findByID({
-      collection: 'products',
-      id: numericProductId,
-      depth: 0,
-    });
-  }
-
-  if (!product && typeof item.productId === 'string' && item.productId.trim()) {
-    const found = await payload.find({
-      collection: 'products',
-      where: { slug: { equals: item.productId.trim() } },
-      limit: 1,
-      depth: 0,
-    });
-    if (found.docs?.[0]) {
-      product = found.docs[0];
-      numericProductId = product.id;
-    }
-  }
-
-  if (!product || product._status !== 'published') {
-    throw new Error(`PRODUCT_UNAVAILABLE: Product ${item.productId} is not available.`);
-  }
-
-  let numericVariantId: number | undefined = undefined;
-  if (item.variantId !== undefined && item.variantId !== null) {
-    const parsedVar = Number(item.variantId);
-    if (Number.isSafeInteger(parsedVar) && parsedVar > 0) {
-      numericVariantId = parsedVar;
-    }
-  }
-
-  // Validate variant if provided
-  if (item.variantId) {
-    const variant = await payload.findByID({
-      collection: 'variants',
-      id: item.variantId,
-      depth: 0,
-    });
-    if (!variant) {
-      throw new Error(`VARIANT_NOT_FOUND: Variant ${item.variantId} does not exist.`);
-    }
-    const variantProdId =
-      typeof variant.product === 'object' && variant.product !== null
-        ? variant.product.id
-        : variant.product;
-    if (String(variantProdId) !== String(item.productId)) {
-      throw new Error(
-        `VARIANT_MISMATCH: Variant ${item.variantId} belongs to product ${variantProdId}, not ${item.productId}.`
-      );
-    }
-  }
-
-  if (!item.operationKey || typeof item.operationKey !== 'string' || !item.operationKey.trim()) {
-    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
-  }
-  const opKey = item.operationKey.trim();
+  const opKey = mutationKey(item.operationKey);
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -315,42 +314,65 @@ export async function addItemToCart(
       depth: 0,
     });
 
+    assertCartIsEditable(cart);
     const appliedOps = parseAppliedOperations(cart.appliedOperations);
     // IDEMPOTENCY GUARD: If operationKey was already applied, do NOT add again!
     if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
-      const hydrated = await hydrateCartLines(cart.items || [], payload);
+      const hydrated = await hydrateCartLines(cart.items || [], payload, locale);
       return calculateCartSummary(hydrated);
     }
+
+    const requestedProductId = typeof item.productId === 'number' || typeof item.productId === 'string' ? Number(item.productId) : NaN;
+    const catalogRead = { depth: 0, draft: false, ...catalogLocale(locale) } as const;
+    let product = Number.isSafeInteger(requestedProductId) && requestedProductId > 0
+      ? await payload.findByID({ collection: 'products', id: requestedProductId, ...catalogRead, joins: false, disableErrors: true })
+      : null;
+    if (!product && typeof item.productId === 'string' && item.productId.trim()) {
+      const { docs } = await payload.find({
+        collection: 'products',
+        where: { slug: { equals: item.productId.trim() } },
+        limit: 1,
+        pagination: false,
+        ...catalogRead,
+        joins: false,
+      });
+      product = docs[0] ?? null;
+    }
+
+    const numericVariantId = item.variantId == null ? undefined : Number(item.variantId);
+    if (numericVariantId !== undefined && (
+      (typeof item.variantId !== 'number' && typeof item.variantId !== 'string') ||
+      !Number.isSafeInteger(numericVariantId) || numericVariantId <= 0
+    )) {
+      throw new APIError('VARIANT_UNAVAILABLE: This variant is unavailable.', 422, undefined, true);
+    }
+    const variant = numericVariantId === undefined ? null : await payload.findByID({
+      collection: 'variants', id: numericVariantId, ...catalogRead, disableErrors: true,
+    });
+    const selectionError = catalogSelectionError(product, numericVariantId, variant, Boolean(item.artworkAssetId));
+    if (selectionError || !product) throw new APIError(selectionError ?? 'PRODUCT_UNAVAILABLE', 422, undefined, true);
+    const numericProductId = product.id;
 
     const items = [...(cart.items || [])];
 
     // Find existing matching line item
-    const existingIndex = items.findIndex((existing: any) => {
-      const existingProdId =
-        typeof existing.product === 'object' && existing.product !== null
-          ? existing.product.id
-          : existing.product;
-      const existingVarId =
-        typeof existing.variant === 'object' && existing.variant !== null
-          ? existing.variant.id
-          : existing.variant;
-
-      return (
-        Number(existingProdId) === numericProductId &&
-        Number(existingVarId || 0) === Number(numericVariantId || 0) &&
-        String(existing.artworkAssetId || '') === String(item.artworkAssetId || '') &&
-        String(existing.printingNotes || '') === String(item.printingNotes || '')
-      );
-    });
+    const existingIndex = items.findIndex((existing) => sameCartLine(existing, {
+      product: numericProductId,
+      variant: numericVariantId,
+      artworkAssetId: item.artworkAssetId,
+      printingNotes: item.printingNotes,
+    }));
 
     if (existingIndex >= 0) {
+      const quantity = items[existingIndex].quantity + qty;
+      if (!Number.isSafeInteger(quantity)) throw new APIError('INVALID_QUANTITY', 422, undefined, true);
       items[existingIndex] = {
         ...items[existingIndex],
-        quantity: Number(items[existingIndex].quantity) + qty,
+        quantity,
       };
     } else {
-      const lineId = `line_${numericProductId}_${numericVariantId || 0}_${Date.now()}`;
+      const lineId = `line_${numericProductId}_${numericVariantId || 0}_${randomUUID()}`;
       items.push({
         id: lineId,
         product: numericProductId,
@@ -362,7 +384,9 @@ export async function addItemToCart(
     }
 
     // Hydrate and calculate
-    const hydrated = await hydrateCartLines(items, payload);
+    const hydrated = await hydrateCartLines(items, payload, locale);
+    const addedLine = hydrated[existingIndex < 0 ? items.length - 1 : existingIndex];
+    if (addedLine?.availabilityError) throw new APIError(addedLine.availabilityError, 422, undefined, true);
     const summary = calculateCartSummary(hydrated);
 
     const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
@@ -376,6 +400,7 @@ export async function addItemToCart(
         appliedOperations: updatedOps,
       },
       depth: 0,
+      context: { preserveCartSubtotal: true },
     });
 
     // Mark as successfully saved in DB before completing
@@ -393,17 +418,15 @@ export async function updateItemQuantity(
   cartId: number,
   itemId: string,
   newQuantity: number,
-  operationKey: string
+  operationKey: string,
+  locale: Locale = defaultLocale,
 ): Promise<CartCalculationSummary> {
   const qty = Number(newQuantity);
   if (!Number.isSafeInteger(qty) || qty < 0) {
-    throw new Error('INVALID_QUANTITY: Quantity must be a non-negative whole integer.');
+    throw new APIError('INVALID_QUANTITY: Quantity must be a non-negative whole integer.', 422, undefined, true);
   }
 
-  if (!operationKey || typeof operationKey !== 'string' || !operationKey.trim()) {
-    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
-  }
-  const opKey = operationKey.trim();
+  const opKey = mutationKey(operationKey);
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -412,10 +435,11 @@ export async function updateItemQuantity(
       depth: 0,
     });
 
+    assertCartIsEditable(cart);
     const appliedOps = parseAppliedOperations(cart.appliedOperations);
     if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
-      const hydrated = await hydrateCartLines(cart.items || [], payload);
+      const hydrated = await hydrateCartLines(cart.items || [], payload, locale);
       return calculateCartSummary(hydrated);
     }
 
@@ -426,7 +450,7 @@ export async function updateItemQuantity(
     } else {
       const targetIndex = items.findIndex((it: any, idx: number) => matchesCartItem(it, idx, itemId));
       if (targetIndex === -1) {
-        throw new Error(`CART_ITEM_NOT_FOUND: Line item ${itemId} not found in cart.`);
+        throw new APIError('CART_ITEM_NOT_FOUND', 404, undefined, true);
       }
       items[targetIndex] = {
         ...items[targetIndex],
@@ -434,7 +458,7 @@ export async function updateItemQuantity(
       };
     }
 
-    const hydrated = await hydrateCartLines(items, payload);
+    const hydrated = await hydrateCartLines(items, payload, locale);
     const summary = calculateCartSummary(hydrated);
 
     const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
@@ -448,6 +472,7 @@ export async function updateItemQuantity(
         appliedOperations: updatedOps,
       },
       depth: 0,
+      context: { preserveCartSubtotal: true },
     });
 
     lockContext.markSaved();
@@ -463,12 +488,10 @@ export async function removeItemFromCart(
   payload: Payload,
   cartId: number,
   itemId: string,
-  operationKey: string
+  operationKey: string,
+  locale: Locale = defaultLocale,
 ): Promise<CartCalculationSummary> {
-  if (!operationKey || typeof operationKey !== 'string' || !operationKey.trim()) {
-    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
-  }
-  const opKey = operationKey.trim();
+  const opKey = mutationKey(operationKey);
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -477,15 +500,16 @@ export async function removeItemFromCart(
       depth: 0,
     });
 
+    assertCartIsEditable(cart);
     const appliedOps = parseAppliedOperations(cart.appliedOperations);
     if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
-      const hydrated = await hydrateCartLines(cart.items || [], payload);
+      const hydrated = await hydrateCartLines(cart.items || [], payload, locale);
       return calculateCartSummary(hydrated);
     }
 
     const items = (cart.items || []).filter((it: any, idx: number) => !matchesCartItem(it, idx, itemId));
-    const hydrated = await hydrateCartLines(items, payload);
+    const hydrated = await hydrateCartLines(items, payload, locale);
     const summary = calculateCartSummary(hydrated);
 
     const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
@@ -499,6 +523,7 @@ export async function removeItemFromCart(
         appliedOperations: updatedOps,
       },
       depth: 0,
+      context: { preserveCartSubtotal: true },
     });
 
     lockContext.markSaved();
@@ -513,12 +538,10 @@ export async function removeItemFromCart(
 export async function clearPersistentCart(
   payload: Payload,
   cartId: number,
-  operationKey: string
+  operationKey: string,
+  locale: Locale = defaultLocale,
 ): Promise<CartCalculationSummary> {
-  if (!operationKey || typeof operationKey !== 'string' || !operationKey.trim()) {
-    throw new Error('MISSING_OPERATION_KEY: A valid operationKey is required for idempotent cart mutation.');
-  }
-  const opKey = operationKey.trim();
+  const opKey = mutationKey(operationKey);
 
   return withCartLock(payload, cartId, async (lockContext) => {
     const cart = await payload.findByID({
@@ -527,10 +550,12 @@ export async function clearPersistentCart(
       depth: 0,
     });
 
+    assertCartIsEditable(cart);
     const appliedOps = parseAppliedOperations(cart.appliedOperations);
     if (appliedOps.includes(opKey)) {
       lockContext.markSaved();
-      return calculateCartSummary([]);
+      const hydrated = await hydrateCartLines(cart.items || [], payload, locale);
+      return calculateCartSummary(hydrated);
     }
 
     const updatedOps = appendAppliedOperation(opKey, cart.appliedOperations);
@@ -544,6 +569,7 @@ export async function clearPersistentCart(
         appliedOperations: updatedOps,
       },
       depth: 0,
+      context: { preserveCartSubtotal: true },
     });
 
     lockContext.markSaved();
@@ -558,7 +584,8 @@ export async function clearPersistentCart(
 export async function getCartSummary(
   payload: Payload,
   cartId: number,
-  shippingFee: number = 0
+  shippingFee: number = 0,
+  locale: Locale = defaultLocale,
 ): Promise<CartCalculationSummary> {
   const cart = await payload.findByID({
     collection: 'carts',
@@ -566,6 +593,8 @@ export async function getCartSummary(
     depth: 0,
   });
 
-  const hydrated = await hydrateCartLines(cart.items || [], payload);
+  if (isRetiredCart(cart)) throw new APIError('CART_NOT_ACTIVE', 409, undefined, true);
+
+  const hydrated = await hydrateCartLines(cart.items || [], payload, locale);
   return calculateCartSummary(hydrated, shippingFee);
 }

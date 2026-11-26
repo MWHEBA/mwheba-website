@@ -1,4 +1,5 @@
 import type { CollectionConfig } from 'payload';
+import { lockOrderRow } from '@/modules/orders/services/orderTransaction';
 import { toIntegerPiastres } from '../../orders/logic/orderSnapshotEngine';
 import { hasRole } from '../../identity/access/roles';
 import { validateReceiptOwnership } from '../services/bankTransferService';
@@ -321,6 +322,7 @@ export const BankTransfers: CollectionConfig = {
                 throw new Error('LINKED_ORDER_REQUIRED: Bank transfer is not associated with an order.');
               }
 
+              await lockOrderRow(req.payload, req, Number(orderId));
               const linkedOrder = await req.payload.findByID({
                 collection: 'orders',
                 id: orderId,

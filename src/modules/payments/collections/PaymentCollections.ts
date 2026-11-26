@@ -117,7 +117,7 @@ export const PaymentCollections: CollectionConfig = {
       required: true,
       options: [
         { label: 'Courier Delivery Partner', value: 'courier' },
-        { label: 'MWHEBA Office Staff (Pickup)', value: 'office_staff' },
+        { label: 'Office Staff (Pickup)', value: 'office_staff' },
       ],
     },
     {
@@ -142,7 +142,7 @@ export const PaymentCollections: CollectionConfig = {
       defaultValue: 'pending_remittance',
       options: [
         { label: 'Pending Remittance to Bank', value: 'pending_remittance' },
-        { label: 'Remitted to Company Account', value: 'remitted_to_company' },
+        { label: 'Cash in Company Custody', value: 'remitted_to_company' },
       ],
       admin: {
         position: 'sidebar',

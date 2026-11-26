@@ -7,7 +7,7 @@ export const CourierRemittances: CollectionConfig = {
     useAsTitle: 'batchId',
     defaultColumns: ['batchId', 'courierCompany', 'grossCollectedAmount', 'netDepositAmount', 'status', 'depositDate'],
     group: 'Finance',
-    description: 'Reconciled courier cash collection remittance batches deposited into MWHEBA bank account.',
+    description: 'Reconciled courier cash collection remittance batches deposited into the company bank account.',
   },
   access: {
     read: ({ req }) => hasRole(req.user, ['super_admin', 'finance']),
@@ -89,7 +89,7 @@ export const CourierRemittances: CollectionConfig = {
       type: 'number',
       required: true,
       admin: {
-        description: 'Actual net cash deposited into MWHEBA corporate bank account.',
+        description: 'Actual net cash deposited into the company bank account.',
       },
     },
     {

@@ -7,6 +7,7 @@ import React, {
   useEffect,
   useCallback,
   useMemo,
+  useRef,
   type ReactNode,
 } from 'react';
 import type {
@@ -19,6 +20,7 @@ import type {
   ProductMoqStatus,
 } from '@/modules/cart-checkout/logic/moqEngine';
 import { executeWithOperationRetry } from '@/modules/cart-checkout/logic/idempotency';
+import type { Locale } from '@/shared/lib/i18n';
 
 export interface AddItemInput {
   productId: string | number;
@@ -44,6 +46,7 @@ export interface CartContextValue {
   closeCart: () => void;
   toggleCart: () => void;
   refreshCart: () => Promise<void>;
+  ensureSession: () => Promise<number>;
   addItem: (item: AddItemInput) => Promise<void>;
   updateQuantity: (id: string, delta: number) => Promise<void>;
   setQuantity: (id: string, quantity: number) => Promise<void>;
@@ -54,410 +57,188 @@ export interface CartContextValue {
   setShippingFee: (fee: number) => void;
 }
 
-const CartContext = createContext<CartContextValue | null>(null);
+interface CartSnapshot {
+  cartId: number | null;
+  summary: CartCalculationSummary | null;
+}
 
-export function CartProvider({ children }: { children: ReactNode }) {
-  const [cartId, setCartId] = useState<number | null>(null);
-  const [items, setItems] = useState<HydratedCartItem[]>([]);
-  const [summary, setSummary] = useState<CartCalculationSummary | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+const CartContext = createContext<CartContextValue | null>(null);
+const emptyCart: CartSnapshot = { cartId: null, summary: null };
+const emptyItems: HydratedCartItem[] = [];
+
+async function readCartResponse(response: Response, mutation = false): Promise<CartSnapshot> {
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.message || error?.error || `HTTP ${response.status}`);
+  }
+  const data = await response.json();
+  if ((mutation && data?.success !== true) || !Array.isArray(data?.summary?.items)) {
+    throw new Error('The cart update could not be confirmed.');
+  }
+  return { cartId: data.cartId ?? null, summary: data.summary };
+}
+
+export function CartProvider({ children, locale }: { children: ReactNode; locale?: Locale }) {
+  const [snapshot, setSnapshot] = useState(emptyCart);
+  const [initialized, setInitialized] = useState(false);
+  const [pending, setPending] = useState(0);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [shippingFee, setShippingFee] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const currentCart = useRef(emptyCart);
+  const pendingRequests = useRef(Promise.resolve());
+  const itemsUrl = locale ? `/api/cart/items?locale=${locale}` : '/api/cart/items';
+  const items = snapshot.summary?.items ?? emptyItems;
+  const { cartId, summary } = snapshot;
 
-  /**
-   * Refreshes the cart state from PostgreSQL via /api/cart/items.
-   */
-  const refreshCart = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/cart/items', {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.cartId) {
-          setCartId(data.cartId);
-        } else {
-          setCartId(null);
-        }
-        if (data.summary) {
-          setSummary(data.summary);
-          setItems(data.summary.items || []);
-        } else if (data.items) {
-          setItems(data.items);
-        }
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Failed to load cart');
-    } finally {
-      setIsLoading(false);
-    }
+  const applySnapshot = useCallback((next: CartSnapshot) => {
+    if (currentCart.current.cartId !== next.cartId) setShippingFee(0);
+    currentCart.current = next;
+    setSnapshot(next);
   }, []);
 
-  // Fetch persistent cart on initial mount
+  // Serialize browser requests so bootstrap cookies and cart snapshots are applied in order.
+  const runCartRequest = useCallback(<T,>(request: () => Promise<T>): Promise<T> => {
+    setPending((count) => count + 1);
+    const result = pendingRequests.current.then(async () => {
+      setError(null);
+      try {
+        return await request();
+      } catch (failure) {
+        setError(failure instanceof Error ? failure.message : 'Cart request failed.');
+        throw failure;
+      } finally {
+        setInitialized(true);
+        setPending((count) => count - 1);
+      }
+    });
+    pendingRequests.current = result.then(() => undefined, () => undefined);
+    return result;
+  }, []);
+
+  const loadCart = useCallback(async (initialize = false) => {
+    const url = initialize ? `${itemsUrl}${locale ? '&' : '?'}init=true` : itemsUrl;
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, cache: 'no-store' });
+    const next = await readCartResponse(response);
+    applySnapshot(next);
+    return next;
+  }, [itemsUrl, locale, applySnapshot]);
+
+  const refreshCart = useCallback(async () => {
+    await runCartRequest(() => loadCart()).catch(() => undefined);
+  }, [loadCart, runCartRequest]);
+
   useEffect(() => {
-    refreshCart();
+    void refreshCart();
   }, [refreshCart]);
 
-  /**
-   * Ensures a signed guest session cookie is established BEFORE executing mutations.
-   * If a session/cartId is already tracked, returns it immediately.
-   * Otherwise, calls GET /api/cart/items?init=true so the server sets the signed cookie.
-   * STOPS immediately with a clear error if session initialization fails.
-   */
-  const ensureSession = useCallback(async (): Promise<number> => {
-    if (cartId) return cartId;
-    let res: Response;
-    try {
-      res = await fetch('/api/cart/items?init=true', {
-        method: 'GET',
-        headers: { Accept: 'application/json' },
+  const initializeCart = useCallback(async (): Promise<number> => {
+    const { cartId: activeCartId } = await loadCart(true);
+    if (!activeCartId) throw new Error('The cart session could not be initialized.');
+    return activeCartId;
+  }, [loadCart]);
+
+  // Upload callers need the current server cart ID before sending private artwork.
+  const ensureSession = useCallback(() => runCartRequest(initializeCart), [initializeCart, runCartRequest]);
+
+  const mutate = useCallback(async (
+    method: 'POST' | 'PATCH' | 'DELETE',
+    body: object,
+    operation: 'add' | 'update' | 'remove' | 'clear',
+  ) => {
+    await executeWithOperationRetry(async (operationKey) => {
+      const response = await fetch(itemsUrl, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, operationKey }),
       });
-    } catch (err: any) {
-      const msg = err?.message || 'Network error initializing cart session';
-      setError(msg);
-      throw new Error(`Failed to initialize cart session: ${msg}`);
-    }
+      applySnapshot(await readCartResponse(response, true));
+    }, operation);
+  }, [itemsUrl, applySnapshot]);
 
-    if (!res.ok) {
-      const errBody = await res.json().catch(() => ({}));
-      const msg = errBody.message || errBody.error || `HTTP ${res.status}`;
-      setError(msg);
-      throw new Error(`Failed to initialize cart session: ${msg}`);
-    }
+  const addItem = useCallback((item: AddItemInput) => runCartRequest(async () => {
+    if (!currentCart.current.cartId) await initializeCart();
+    const { productId, variantId, quantity, artworkAssetId, printingNotes } = item;
+    await mutate('POST', { productId, variantId, quantity, artworkAssetId, printingNotes }, 'add');
+    setIsCartOpen(true);
+  }), [initializeCart, mutate, runCartRequest]);
 
-    const data = await res.json();
-    if (!data.cartId) {
-      const msg = 'Missing cartId in session initialization response';
-      setError(msg);
-      throw new Error(`Failed to initialize cart session: ${msg}`);
-    }
-
-    setCartId(data.cartId);
-    if (data.summary) {
-      setSummary(data.summary);
-      setItems(data.summary.items || []);
-    }
-    return data.cartId;
-  }, [cartId]);
-
-  /**
-   * Adds an item to the persistent PostgreSQL cart with retry & idempotency.
-   */
-  const addItem = useCallback(
-    async (item: AddItemInput) => {
-      setError(null);
-      setIsLoading(true);
-      try {
-        // Initialize signed session before mutation so subsequent attempts share the same session
-        await ensureSession();
-
-        await executeWithOperationRetry(
-          async (operationKey) => {
-            const res = await fetch('/api/cart/items', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                productId: item.productId,
-                variantId: item.variantId,
-                quantity: item.quantity,
-                artworkAssetId: item.artworkAssetId,
-                printingNotes: item.printingNotes,
-                operationKey,
-              }),
-            });
-
-            if (!res.ok) {
-              const errBody = await res.json().catch(() => ({}));
-              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
-            }
-
-            const data = await res.json();
-            if (data.cartId) setCartId(data.cartId);
-            if (data.summary) {
-              setSummary(data.summary);
-              setItems(data.summary.items || []);
-            }
-            return data;
-          },
-          'add'
-        );
-        setIsCartOpen(true);
-      } catch (err: any) {
-        setError(err.message || 'Failed to add item to cart');
-        throw err;
-      } finally {
-        setIsLoading(false);
+  const editQuantity = useCallback((id: string, getQuantity: (current: number) => number) =>
+    runCartRequest(async () => {
+      const target = currentCart.current.summary?.items.find((item) => item.id === id);
+      if (!target) return;
+      const quantity = getQuantity(target.quantity);
+      if (quantity <= 0) {
+        await mutate('DELETE', { itemId: id }, 'update');
+      } else {
+        await mutate('PATCH', { itemId: id, quantity }, 'update');
       }
-    },
-    [ensureSession]
-  );
+    }), [mutate, runCartRequest]);
 
-  /**
-   * Updates quantity by delta with idempotent retry.
-   */
-  const updateQuantity = useCallback(
-    async (id: string, delta: number) => {
-      const targetItem = items.find((it) => it.id === id);
-      if (!targetItem) return;
-      const nextQuantity = targetItem.quantity + delta;
+  const updateQuantity = useCallback((id: string, delta: number) =>
+    editQuantity(id, (quantity) => quantity + delta), [editQuantity]);
 
-      setError(null);
-      setIsLoading(true);
-      try {
-        await ensureSession();
+  const setQuantity = useCallback((id: string, quantity: number) =>
+    editQuantity(id, () => quantity), [editQuantity]);
 
-        await executeWithOperationRetry(
-          async (operationKey) => {
-            let res: Response;
-            if (nextQuantity <= 0) {
-              res = await fetch('/api/cart/items', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ itemId: id, operationKey }),
-              });
-            } else {
-              res = await fetch('/api/cart/items', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ itemId: id, quantity: nextQuantity, operationKey }),
-              });
-            }
+  const removeItem = useCallback((id: string) =>
+    runCartRequest(() => mutate('DELETE', { itemId: id }, 'remove')), [mutate, runCartRequest]);
 
-            if (!res.ok) {
-              const errBody = await res.json().catch(() => ({}));
-              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
-            }
+  const clearCart = useCallback(() => runCartRequest(async () => {
+    if (!currentCart.current.cartId) return;
+    await mutate('DELETE', { clearAll: true }, 'clear');
+  }), [mutate, runCartRequest]);
 
-            const data = await res.json();
-            if (data.summary) {
-              setSummary(data.summary);
-              setItems(data.summary.items || []);
-            }
-            return data;
-          },
-          'update'
-        );
-      } catch (err: any) {
-        setError(err.message || 'Failed to update quantity');
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [items, ensureSession]
-  );
-
-  /**
-   * Sets absolute quantity with idempotent retry.
-   */
-  const setQuantity = useCallback(
-    async (id: string, quantity: number) => {
-      const validQty = Math.max(0, quantity);
-      const targetItem = items.find((it) => it.id === id);
-      if (!targetItem) return;
-
-      setError(null);
-      setIsLoading(true);
-      try {
-        await ensureSession();
-
-        await executeWithOperationRetry(
-          async (operationKey) => {
-            let res: Response;
-            if (validQty === 0) {
-              res = await fetch('/api/cart/items', {
-                method: 'DELETE',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ itemId: id, operationKey }),
-              });
-            } else {
-              res = await fetch('/api/cart/items', {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ itemId: id, quantity: validQty, operationKey }),
-              });
-            }
-
-            if (!res.ok) {
-              const errBody = await res.json().catch(() => ({}));
-              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
-            }
-
-            const data = await res.json();
-            if (data.summary) {
-              setSummary(data.summary);
-              setItems(data.summary.items || []);
-            }
-            return data;
-          },
-          'update'
-        );
-      } catch (err: any) {
-        setError(err.message || 'Failed to set quantity');
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [items, ensureSession]
-  );
-
-  /**
-   * Removes a line item with idempotent retry.
-   */
-  const removeItem = useCallback(
-    async (id: string) => {
-      setError(null);
-      setIsLoading(true);
-      try {
-        await ensureSession();
-
-        await executeWithOperationRetry(
-          async (operationKey) => {
-            const res = await fetch('/api/cart/items', {
-              method: 'DELETE',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ itemId: id, operationKey }),
-            });
-
-            if (!res.ok) {
-              const errBody = await res.json().catch(() => ({}));
-              throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
-            }
-
-            const data = await res.json();
-            if (data.summary) {
-              setSummary(data.summary);
-              setItems(data.summary.items || []);
-            }
-            return data;
-          },
-          'remove'
-        );
-      } catch (err: any) {
-        setError(err.message || 'Failed to remove item');
-        throw err;
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [ensureSession]
-  );
-
-  /**
-   * Resets client session state after a purchased cart. The server cookie still points to the
-   * purchased cart, which GET ?init=true treats as invalid and replaces with a new cart.
-   */
   const resetSession = useCallback(() => {
-    setCartId(null);
-    setItems([]);
-    setSummary(null);
+    applySnapshot(emptyCart);
     setShippingFee(0);
     setError(null);
-  }, []);
+  }, [applySnapshot]);
 
-  /**
-   * Clears the persistent cart completely with idempotent retry.
-   */
-  const clearCart = useCallback(async () => {
-    setError(null);
-    setIsLoading(true);
-    try {
-      await ensureSession();
+  const rawItems: CartLineItem[] = useMemo(() => items.map((item) => ({
+    id: item.id,
+    productId: String(item.productId),
+    variantId: item.variantId ? String(item.variantId) : undefined,
+    variantName: item.variantTitle,
+    quantity: item.quantity,
+    artworkAssetId: item.artworkAssetId,
+    printingNotes: item.printingNotes,
+  })), [items]);
 
-      await executeWithOperationRetry(
-        async (operationKey) => {
-          const res = await fetch('/api/cart/items', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ clearAll: true, operationKey }),
-          });
-
-          if (!res.ok) {
-            const errBody = await res.json().catch(() => ({}));
-            throw new Error(errBody.message || errBody.error || `HTTP ${res.status}`);
-          }
-
-          const data = await res.json();
-          if (data.summary) {
-            setSummary(data.summary);
-            setItems(data.summary.items || []);
-          } else {
-            setItems([]);
-          }
-          return data;
-        },
-        'clear'
-      );
-    } catch (err: any) {
-      setError(err.message || 'Failed to clear cart');
-      throw err;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [ensureSession]);
-
-  // Map hydrated server items to lightweight CartLineItem format
-  const rawItems: CartLineItem[] = useMemo(() => {
-    return items.map((it) => ({
-      id: it.id,
-      productId: String(it.productId),
-      variantId: it.variantId ? String(it.variantId) : undefined,
-      variantName: it.variantTitle,
-      quantity: it.quantity,
-      artworkAssetId: it.artworkAssetId,
-      printingNotes: it.printingNotes,
-    }));
-  }, [items]);
-
-  // Reactive calculation result matching moqEngine structure for UI components
+  const isLoading = !initialized || pending > 0;
   const calculation: CartCalculationResult = useMemo(() => {
-    if (!summary) {
-      return {
-        items: rawItems,
-        productStatuses: {},
-        subtotal: 0,
-        totalCustomizationFees: 0,
-        grandTotal: shippingFee,
-        canCheckout: false,
-        validationErrors: [],
-      };
-    }
-
     const productStatuses: Record<string, ProductMoqStatus> = {};
-    for (const [pId, grp] of Object.entries(summary.productGroupings || {})) {
-      productStatuses[pId] = {
-        productId: String(grp.productId),
-        productTitle: grp.productTitle,
-        totalQuantity: grp.totalQuantity,
-        minOrderQuantity: grp.minOrderQuantity,
-        isSatisfied: grp.isSatisfied,
-        remainingNeeded: grp.remainingNeeded,
+    for (const [productId, group] of Object.entries(summary?.productGroupings ?? {})) {
+      productStatuses[productId] = {
+        productId: String(group.productId),
+        productTitle: group.productTitle,
+        totalQuantity: group.totalQuantity,
+        minOrderQuantity: group.minOrderQuantity,
+        isSatisfied: group.isSatisfied,
+        remainingNeeded: group.remainingNeeded,
       };
     }
 
     return {
       items: rawItems,
       productStatuses,
-      subtotal: summary.subtotal,
-      totalCustomizationFees: summary.totalCustomizationFees,
-      grandTotal: summary.grandTotal + shippingFee,
-      canCheckout: summary.canCheckout,
-      validationErrors: summary.validationErrors,
+      subtotal: summary?.subtotal ?? 0,
+      totalCustomizationFees: summary?.totalCustomizationFees ?? 0,
+      grandTotal: summary?.grandTotal ?? 0,
+      canCheckout: Boolean(summary?.canCheckout && !isLoading && !error),
+      validationErrors: summary?.validationErrors ?? [],
     };
-  }, [summary, rawItems, shippingFee]);
+  }, [summary, rawItems, isLoading, error]);
 
-  const totalCount = useMemo(() => {
-    return summary?.totalItemsCount ?? items.reduce((acc, curr) => acc + curr.quantity, 0);
-  }, [summary, items]);
-
-  const openCart = useCallback(() => setIsCartOpen(true), []);
+  const openCart = useCallback(() => {
+    setIsCartOpen(true);
+    if (initialized && !pending) void refreshCart();
+  }, [initialized, pending, refreshCart]);
   const closeCart = useCallback(() => setIsCartOpen(false), []);
-  const toggleCart = useCallback(() => setIsCartOpen((prev) => !prev), []);
+  const toggleCart = useCallback(() => {
+    if (isCartOpen) closeCart();
+    else openCart();
+  }, [isCartOpen, closeCart, openCart]);
 
   const value: CartContextValue = {
     cartId,
@@ -467,19 +248,21 @@ export function CartProvider({ children }: { children: ReactNode }) {
     summary,
     isLoading,
     isCartOpen,
-    totalCount,
+    totalCount: summary?.totalItemsCount ?? 0,
     shippingFee,
     error,
     openCart,
     closeCart,
     toggleCart,
     refreshCart,
+    ensureSession,
     addItem,
     updateQuantity,
     setQuantity,
     removeItem,
     clearCart,
-    resetSession,    setShippingFee,
+    resetSession,
+    setShippingFee,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

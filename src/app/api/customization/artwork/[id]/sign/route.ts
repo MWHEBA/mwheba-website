@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
-import { CART_COOKIE_NAME } from '@/modules/cart-checkout/services/cartStorage';
-import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
+import { CART_COOKIE_NAME, cartRelationId } from '@/modules/cart-checkout/services/cartStorage';
+import { applyCartCookie, resolveCartRequest } from '@/modules/cart-checkout/services/cartRequest';
 import { hasRole } from '@/modules/identity/access/roles';
 import { createArtworkDownloadToken } from '@/modules/customization/lib/privateStorage';
+import type { ArtworkAsset } from '@/payload-types';
 
 /**
  * POST /api/customization/artwork/:id/sign
  * Generates an authorized, time-limited (15-min) download URL for private artwork assets.
  * Caller must be:
- * - The session owner (matching guest cart session cookie)
+ * - The owner of the active cart associated with the asset
  * - The authenticated uploader
  * - Staff with super_admin or operations role (finance and creative roles are NOT granted production-file access here)
  */
@@ -18,6 +19,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let guestCookie: Awaited<ReturnType<typeof resolveCartRequest>>['guestCookie'] = null;
+  const respond = (body: object, status = 200) =>
+    applyCartCookie(NextResponse.json(body, { status }), guestCookie);
+
   try {
     const { id } = await params;
     if (!id) {
@@ -26,7 +31,7 @@ export async function POST(
 
     const payload = await getPayload({ config: configPromise });
 
-    let asset: any;
+    let asset: ArtworkAsset | null;
     try {
       asset = await payload.findByID({
         collection: 'artwork-assets',
@@ -43,14 +48,12 @@ export async function POST(
 
     // 1. Check Authenticated User Roles
     let isAuthorized = false;
-    let authUser: any = null;
     try {
-      const authResult = await payload.auth({ headers: req.headers });
-      if (authResult?.user) {
-        authUser = authResult.user;
+      const { user: authUser } = await payload.auth({ headers: req.headers });
+      if (authUser) {
         if (hasRole(authUser, ['super_admin', 'operations'])) {
           isAuthorized = true;
-        } else if (asset.uploader && String(asset.uploader) === String(authUser.id)) {
+        } else if (cartRelationId(asset.uploader) === authUser.id) {
           isAuthorized = true;
         }
       }
@@ -58,27 +61,30 @@ export async function POST(
       // Guest session check
     }
 
-    // 2. Check Guest Session Ownership via Signed Cookie
+    // 2. Check the verified active cart if staff and uploader permissions did not apply.
     if (!isAuthorized) {
-      const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
-      const sessionCartId = readCartId(cookieVal);
-
-      if (sessionCartId) {
-        const ownerSessionMatches = asset.ownerSession && String(asset.ownerSession) === String(sessionCartId);
-        const cartIdMatches = asset.cart && String(asset.cart) === String(sessionCartId);
-        if (ownerSessionMatches || cartIdMatches) {
-          isAuthorized = true;
-        }
+      const session = await resolveCartRequest(payload, {
+        headers: req.headers,
+        signedCartCookie: req.cookies.get(CART_COOKIE_NAME)?.value,
+      });
+      guestCookie = session.guestCookie;
+      if (session.cart) {
+        // An authenticated request can reassign this pending asset during cart reconciliation.
+        const currentAsset = session.user && session.guestCookie === 'clear'
+          ? await payload.findByID({ collection: 'artwork-assets', id: asset.id, depth: 0, disableErrors: true })
+          : asset;
+        isAuthorized = Boolean(currentAsset &&
+          String(cartRelationId(currentAsset.cart) ?? currentAsset.ownerSession) === String(session.cart.id));
       }
     }
 
     if (!isAuthorized) {
-      return NextResponse.json(
+      return respond(
         {
           error: 'FORBIDDEN_ARTWORK_ACCESS',
           message: 'You do not have permission to generate download links for this artwork asset.',
         },
-        { status: 403 }
+        403
       );
     }
 
@@ -86,19 +92,19 @@ export async function POST(
     const { token, expiresIn } = createArtworkDownloadToken(asset.id, 900);
     const downloadUrl = `/api/customization/artwork/${asset.id}/download?token=${token}`;
 
-    return NextResponse.json({
+    return respond({
       success: true,
       assetId: asset.id,
       url: downloadUrl,
       expiresIn,
     });
   } catch (err: any) {
-    return NextResponse.json(
+    return respond(
       {
         error: 'INTERNAL_ERROR',
         message: err.message || 'Failed to sign artwork download link.',
       },
-      { status: 500 }
+      500
     );
   }
 }

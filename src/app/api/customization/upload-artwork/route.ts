@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
-import { CART_COOKIE_NAME, withCartLock } from '@/modules/cart-checkout/services/cartStorage';
-import { readCartId } from '@/modules/cart-checkout/logic/cartSession';
+import { CART_COOKIE_NAME, cartRelationId, isRetiredCart, withCartLock } from '@/modules/cart-checkout/services/cartStorage';
+import { applyCartCookie, resolveCartRequest } from '@/modules/cart-checkout/services/cartRequest';
 import { validateArtworkFile } from '@/modules/customization/lib/fileValidation';
 import { saveArtworkFile, cleanupUploadedArtwork } from '@/modules/customization/lib/privateStorage';
+import type { ArtworkAsset } from '@/payload-types';
 
 /**
  * POST /api/customization/upload-artwork
@@ -18,30 +19,29 @@ import { saveArtworkFile, cleanupUploadedArtwork } from '@/modules/customization
  * 6. Atomic binding to cart line item under withCartLock PostgreSQL advisory lock with safe rollback
  */
 export async function POST(req: NextRequest) {
+  let guestCookie: Awaited<ReturnType<typeof resolveCartRequest>>['guestCookie'] = null;
+  const respond = (body: object, status = 200) =>
+    applyCartCookie(NextResponse.json(body, { status }), guestCookie);
+
   try {
     const payload = await getPayload({ config: configPromise });
 
     // 1. Session resolution
-    const cookieVal = req.cookies.get(CART_COOKIE_NAME)?.value;
-    const sessionCartId = readCartId(cookieVal);
-
-    let authUser: any = null;
-    try {
-      const authResult = await payload.auth({ headers: req.headers });
-      if (authResult?.user) {
-        authUser = authResult.user;
-      }
-    } catch {
-      // Guest session
-    }
+    const { cart, user: authUser, guestCookie: cookie } = await resolveCartRequest(payload, {
+      headers: req.headers,
+      signedCartCookie: req.cookies.get(CART_COOKIE_NAME)?.value,
+    });
+    guestCookie = cookie;
+    const sessionCartId = cart?.id;
+    const sessionCustomerId = cartRelationId(cart?.customer) ?? null;
 
     if (!sessionCartId && !authUser) {
-      return NextResponse.json(
+      return respond(
         {
           error: 'SESSION_REQUIRED',
           message: 'Active cart session or login required to upload artwork files.',
         },
-        { status: 401 }
+        401
       );
     }
 
@@ -50,12 +50,12 @@ export async function POST(req: NextRequest) {
     try {
       formData = await req.formData();
     } catch {
-      return NextResponse.json(
+      return respond(
         {
           error: 'INVALID_FORM_DATA',
           message: 'Request must be multipart/form-data with a file field.',
         },
-        { status: 400 }
+        400
       );
     }
 
@@ -63,58 +63,40 @@ export async function POST(req: NextRequest) {
     const lineItemId = formData.get('lineItemId')?.toString()?.trim() || undefined;
 
     if (!file || typeof file === 'string' || !(file instanceof Blob)) {
-      return NextResponse.json(
+      return respond(
         {
           error: 'MISSING_FILE',
           message: 'Valid file field is required in multipart form data.',
         },
-        { status: 400 }
+        400
       );
     }
 
     // 3. Pre-validate Cart & Line Item if requested BEFORE modifying disk or database
-    let targetCart: any = null;
     if (lineItemId) {
-      if (!sessionCartId) {
-        return NextResponse.json(
+      if (!cart) {
+        return respond(
           {
             error: 'CART_SESSION_REQUIRED',
             message: 'Line item binding requires an active cart session.',
           },
-          { status: 400 }
+          400
         );
       }
 
-      targetCart = await payload.findByID({
-        collection: 'carts',
-        id: sessionCartId,
-        depth: 0,
-      });
-
-      if (!targetCart) {
-        return NextResponse.json(
-          {
-            error: 'CART_NOT_FOUND',
-            message: 'The cart associated with this session was not found.',
-          },
-          { status: 404 }
-        );
-      }
-
-      const items = Array.isArray(targetCart.items) ? targetCart.items : [];
-      const itemExists = items.some((item: any) => item.id === lineItemId);
+      const itemExists = cart.items?.some((item) => item.id === lineItemId);
       if (!itemExists) {
-        return NextResponse.json(
+        return respond(
           {
             error: 'LINE_ITEM_NOT_FOUND',
             message: `Line item '${lineItemId}' does not exist in the active cart.`,
           },
-          { status: 422 }
+          422
         );
       }
     }
 
-    const originalFilename = (file as any).name || 'artwork.dat';
+    const originalFilename = file.name || 'artwork.dat';
     const buffer = Buffer.from(await file.arrayBuffer());
 
     // 4. Strict Content & Magic Bytes Validation
@@ -122,21 +104,21 @@ export async function POST(req: NextRequest) {
 
     if (!validation.isValid) {
       if (validation.error?.includes('exceeds the maximum')) {
-        return NextResponse.json(
+        return respond(
           {
             error: 'FILE_TOO_LARGE',
             message: validation.error,
           },
-          { status: 413 }
+          413
         );
       }
 
-      return NextResponse.json(
+      return respond(
         {
           error: 'INVALID_FILE_CONTENT',
           message: validation.error || 'File validation failed.',
         },
-        { status: 422 }
+        422
       );
     }
 
@@ -144,7 +126,7 @@ export async function POST(req: NextRequest) {
     const { storageKey } = await saveArtworkFile(buffer, validation.originalFilename);
 
     // 6. Create ArtworkAssets Collection Record via trusted context
-    let asset: any;
+    let asset: ArtworkAsset;
     try {
       asset = await payload.create({
         collection: 'artwork-assets',
@@ -157,7 +139,7 @@ export async function POST(req: NextRequest) {
           status: 'pending_order',
           verificationStatus: 'valid',
           scanStatus: 'unscanned',
-          ownerSession: sessionCartId ? String(sessionCartId) : undefined,
+          ownerSession: sessionCartId && sessionCustomerId === null ? String(sessionCartId) : undefined,
           cart: sessionCartId || undefined,
           lineItemId,
           uploader: authUser?.id || undefined,
@@ -165,15 +147,13 @@ export async function POST(req: NextRequest) {
         context: { isTrustedUpload: true },
         depth: 0,
       });
-    } catch (createErr: any) {
+    } catch (createErr) {
       await cleanupUploadedArtwork(storageKey);
       throw createErr;
     }
 
     // 7. Atomic Binding to Cart Line Item under withCartLock (re-reading fresh cart state)
     if (lineItemId && sessionCartId) {
-      let cartUpdated = false;
-
       try {
         await withCartLock(payload, sessionCartId, async (lockCtx) => {
           // Re-fetch fresh cart under PostgreSQL advisory lock to ensure latest items & concurrent mutations
@@ -181,26 +161,26 @@ export async function POST(req: NextRequest) {
             collection: 'carts',
             id: sessionCartId,
             depth: 0,
+            disableErrors: true,
           });
 
-          if (!freshCart) {
-            const err: any = new Error('Cart session was not found.');
-            err.code = 'CART_NOT_FOUND';
-            throw err;
+          if (!freshCart || freshCart.purchasedAt || isRetiredCart(freshCart)
+            || (cartRelationId(freshCart.customer) ?? null) !== sessionCustomerId
+            || (!sessionCustomerId && freshCart.secret !== cart?.secret)) {
+            throw Object.assign(new Error('Cart session was not found.'), { code: 'CART_NOT_FOUND' });
           }
 
-          const currentItems = Array.isArray(freshCart.items) ? freshCart.items : [];
-          const targetIndex = currentItems.findIndex((item: any) => item.id === lineItemId);
-
-          if (targetIndex === -1) {
-            const err: any = new Error(`Line item '${lineItemId}' was concurrently removed or does not exist.`);
-            err.code = 'LINE_ITEM_REMOVED_CONCURRENTLY';
-            throw err;
+          const currentItems = freshCart.items ?? [];
+          if (!currentItems.some((item) => item.id === lineItemId)) {
+            throw Object.assign(
+              new Error(`Line item '${lineItemId}' was concurrently removed or does not exist.`),
+              { code: 'LINE_ITEM_REMOVED_CONCURRENTLY' }
+            );
           }
 
           // Preserve all concurrent mutations (e.g. updated quantity, removed other items)
           // and update strictly the target line item's artworkAssetId
-          const updatedItems = currentItems.map((item: any) => {
+          const updatedItems = currentItems.map((item) => {
             if (item.id === lineItemId) {
               return {
                 ...item,
@@ -220,7 +200,6 @@ export async function POST(req: NextRequest) {
           });
 
           lockCtx.markSaved();
-          cartUpdated = true;
         });
       } catch (bindErr: any) {
         // AMBIGUOUS / FAILED UPDATE RECOVERY:
@@ -230,18 +209,24 @@ export async function POST(req: NextRequest) {
         let verificationSucceeded = false;
 
         try {
+          const savedAsset = await payload.findByID({
+            collection: 'artwork-assets',
+            id: asset.id,
+            depth: 0,
+          });
+          const assetCartId = cartRelationId(savedAsset?.cart);
           const verifyCart = await payload.findByID({
             collection: 'carts',
-            id: sessionCartId,
+            id: assetCartId ?? sessionCartId,
             depth: 0,
           });
 
-          if (verifyCart && Array.isArray(verifyCart.items)) {
+          if (verifyCart && savedAsset) {
             verificationSucceeded = true;
-            const boundItem = verifyCart.items.find(
-              (item: any) => item.id === lineItemId && String(item.artworkAssetId) === String(asset.id)
+            const boundItem = verifyCart.items?.find(
+              (item) => item.id === (savedAsset.lineItemId ?? lineItemId) && String(item.artworkAssetId) === String(asset.id)
             );
-            if (boundItem) {
+            if (boundItem || savedAsset.status === 'committed_order') {
               isActuallyLinked = true;
             }
           }
@@ -252,7 +237,7 @@ export async function POST(req: NextRequest) {
         if (isActuallyLinked) {
           // DATABASE COMMITTED: The line item is already linked to this artwork asset in PostgreSQL.
           // NEVER delete the file or asset. Safely recover and return HTTP 201 success.
-          return NextResponse.json(
+          return respond(
             {
               success: true,
               assetId: asset.id,
@@ -265,7 +250,7 @@ export async function POST(req: NextRequest) {
               boundToLineItem: true,
               recoveredFromGlitch: true,
             },
-            { status: 201 }
+            201
           );
         }
 
@@ -282,26 +267,30 @@ export async function POST(req: NextRequest) {
         }
 
         if (bindErr.code === 'LINE_ITEM_REMOVED_CONCURRENTLY') {
-          return NextResponse.json(
+          return respond(
             {
               error: 'LINE_ITEM_NOT_FOUND',
               message: bindErr.message,
             },
-            { status: 422 }
+            422
           );
         }
 
-        return NextResponse.json(
+        if (bindErr.code === 'CART_NOT_FOUND') {
+          return respond({ error: 'CART_NOT_FOUND', message: bindErr.message }, 404);
+        }
+
+        return respond(
           {
             error: 'CART_BINDING_FAILED',
             message: `Failed to bind artwork to cart line item: ${bindErr?.message || 'Database update error'}`,
           },
-          { status: 500 }
+          500
         );
       }
     }
 
-    return NextResponse.json(
+    return respond(
       {
         success: true,
         assetId: asset.id,
@@ -313,15 +302,15 @@ export async function POST(req: NextRequest) {
         scanStatus: 'unscanned',
         boundToLineItem: Boolean(lineItemId),
       },
-      { status: 201 }
+      201
     );
   } catch (err: any) {
-    return NextResponse.json(
+    return respond(
       {
         error: 'INTERNAL_ERROR',
         message: err.message || 'Artwork upload failed.',
       },
-      { status: 500 }
+      500
     );
   }
 }

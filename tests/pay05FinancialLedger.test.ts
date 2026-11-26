@@ -1,8 +1,10 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -39,8 +41,16 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
 
   const unique = () => `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, {
+      bankTransfer: true,
+      additionalRates: [
+        { regionCode: 'EG-ASN', amount: 120, codAllowed: true },
+        { regionCode: 'EG-BA', amount: 120, codAllowed: true },
+      ],
+    });
     const password = 'Password2026!';
 
     customerUser = await payload.create({
@@ -92,6 +102,7 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
     product1 = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY05-FOLDER',
         title: 'PAY-05 Executive Folder',
         slug: `pay05-folder-${unique()}`,
         itemType: 'physical',
@@ -100,11 +111,13 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', product1.id);
     cleanup.products.push(product1.id);
 
     product2 = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY05-PEN',
         title: 'PAY-05 Luxury Pen',
         slug: `pay05-pen-${unique()}`,
         itemType: 'physical',
@@ -113,11 +126,13 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', product2.id);
     cleanup.products.push(product2.id);
 
     productCustom = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY05-DIARY',
         title: 'PAY-05 Custom Embossed Diary',
         slug: `pay05-diary-${unique()}`,
         itemType: 'physical',
@@ -128,10 +143,12 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', productCustom.id);
     cleanup.products.push(productCustom.id);
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     const del = async (collection: string, id: any, context?: any) => {
       try {
         await payload.delete({ collection, id, context });
@@ -205,6 +222,7 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
           },
           delivery: {
             method,
+            ...confirmedTestDelivery(quote),
             shippingAddress:
               method === 'shipping'
                 ? { governorate, city: `${governorate} City`, streetAddress: `Street #${i}` }
@@ -213,6 +231,7 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
           },
           paymentMethod: i % 2 === 0 ? 'cod' : 'bank_transfer',
           expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
           idempotencyKey: `idemp_batch50_${i}_${unique()}`,
         });
 
@@ -260,9 +279,10 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
         guestSecret: cart.secret,
         user: customerUser,
         customer: { email: customerUser.email, companyName: 'Audit Test Corp', contactPerson: 'Audit', phone: '+20101' },
-        delivery: { method: 'pickup', expectedShippingFee: quote.shippingFee },
+        delivery: { method: 'pickup', ...confirmedTestDelivery(quote), expectedShippingFee: quote.shippingFee },
         paymentMethod: 'bank_transfer',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
         idempotencyKey: `tax_test_${unique()}`,
       });
 
@@ -413,9 +433,10 @@ describe('PAY-05: Financial Ledger, Tax Review Boundary & Deferred Gateway Maint
         guestSecret: cart.secret,
         user: customerUser,
         customer: { email: customerUser.email, companyName: 'Receipt Verification Corp', contactPerson: 'Cust', phone: '+20101' },
-        delivery: { method: 'pickup', expectedShippingFee: quote.shippingFee },
+        delivery: { method: 'pickup', ...confirmedTestDelivery(quote), expectedShippingFee: quote.shippingFee },
         paymentMethod: 'bank_transfer',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
         idempotencyKey: `receipt_view_${unique()}`,
       });
       cleanup.orders.push(orderRes.order.id);

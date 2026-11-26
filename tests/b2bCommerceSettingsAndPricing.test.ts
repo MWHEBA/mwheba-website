@@ -1,7 +1,9 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment, testPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -60,8 +62,10 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
 
   const params = (id: any) => ({ params: Promise.resolve({ id: String(id) }) });
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, { bankTransfer: true });
 
     const admin = await createStaff('super_admin');
     superAdminUser = admin.user;
@@ -82,6 +86,7 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
     physicalProduct = await payload.create({
       collection: 'products',
       data: {
+        sku: 'B2B06-PEN',
         title: 'B2B-06 Corporate Pen',
         slug: `b06-pen-${unique()}`,
         itemType: 'physical',
@@ -91,6 +96,7 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProduct.id);
 
     serviceProduct = await payload.create({
       collection: 'products',
@@ -126,6 +132,7 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     // Restore permissive review defaults so other test suites are never hindered
     try {
       await payload.updateGlobal({
@@ -267,7 +274,7 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
   // 2. Dynamic Tariff & Quote Calculations (D-015 Parameterization)
   // ===========================================================================
   describe('2. Dynamic Tariff & Quote Calculations (D-015)', () => {
-    it('calculates checkout quotes using runtime settings and marks provisional status until owner approval', async () => {
+    it('returns no checkout tariff from provisional or missing settings and applies an approved fixture rate', async () => {
       const cart = await getOrCreateCart(payload);
       cleanup.carts.push(cart.id);
       await payload.update({
@@ -276,56 +283,43 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
         data: { items: [{ product: physicalProduct.id, quantity: 10 }] },
       });
 
-      // While tariffStatus is provisional
-      const quoteProvisional = await buildCheckoutQuote(payload, cart.id, {
-        method: 'shipping',
-        governorate: 'Cairo',
-      });
-      expect(quoteProvisional.shippingFee).toBe(80);
-      expect(quoteProvisional.isProvisional).toBe(true);
-      expect(quoteProvisional.tariffScheduleStatus).toBe('pending_owner_tariff_approval');
-      expect(quoteProvisional.grandTotal).toBe(50 * 10 + 80);
+      const quote = () => buildCheckoutQuote(payload, cart.id, { method: 'shipping', governorate: 'Cairo' });
+      const revised = {
+        ...testPilotFulfillment,
+        status: 'owner_approved' as 'owner_approved' | 'provisional',
+        reference: 'test-fixture-v2',
+        delivery: [{ regionCode: 'EG-C', amount: 110, codAllowed: true }],
+      };
+      const setPilot = (pilotFulfillment: typeof revised | typeof testPilotFulfillment | null) =>
+        payload.updateGlobal({
+          slug: 'commerce-settings',
+          data: { pilotFulfillment },
+          user: superAdminUser,
+          overrideAccess: false,
+        });
+      try {
+        for (const config of [null, { ...revised, status: 'provisional' as const }]) {
+          await setPilot(config);
+          expect(await quote()).toMatchObject({
+            shippingFee: 0,
+            canCheckout: false,
+            isProvisional: true,
+            tariffScheduleStatus: 'pending_owner_tariff_approval',
+            fulfillment: { issue: 'NO_APPROVED_FULFILLMENT', options: [], selected: null },
+          });
+        }
 
-      // Super admin updates the Cairo fee to 110 at runtime
-      await payload.updateGlobal({
-        slug: 'commerce-settings',
-        data: { cairoAndGizaFee: 110 },
-        user: superAdminUser,
-        overrideAccess: false,
-      });
-
-      const quoteUpdated = await buildCheckoutQuote(payload, cart.id, {
-        method: 'shipping',
-        governorate: 'Cairo',
-      });
-      expect(quoteUpdated.shippingFee).toBe(110);
-      expect(quoteUpdated.grandTotal).toBe(50 * 10 + 110);
-
-      // Super admin marks tariff schedule as owner approved
-      await payload.updateGlobal({
-        slug: 'commerce-settings',
-        data: { tariffStatus: 'owner_approved' },
-        user: superAdminUser,
-        overrideAccess: false,
-      });
-
-      const quoteApproved = await buildCheckoutQuote(payload, cart.id, {
-        method: 'shipping',
-        governorate: 'Cairo',
-      });
-      expect(quoteApproved.isProvisional).toBe(false);
-      expect(quoteApproved.tariffScheduleStatus).toBe('owner_approved');
-
-      // Reset to provisional 80 for remaining tests
-      await payload.updateGlobal({
-        slug: 'commerce-settings',
-        data: {
-          tariffStatus: 'provisional',
-          cairoAndGizaFee: 80,
-        },
-        user: superAdminUser,
-        overrideAccess: false,
-      });
+        await setPilot(revised);
+        expect(await quote()).toMatchObject({
+          shippingFee: 110,
+          grandTotal: 610,
+          isProvisional: false,
+          tariffScheduleStatus: 'owner_approved',
+          fulfillment: { selected: { configurationReference: 'test-fixture-v2', regionCode: 'EG-C' } },
+        });
+      } finally {
+        await setPilot(testPilotFulfillment);
+      }
     });
   });
 
@@ -353,11 +347,13 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
         customer: { email, password: 'Password2026!', companyName: 'Snapshot Corp', contactPerson: 'CFO', phone: '+201011112222' },
         delivery: {
           method: 'shipping',
+          ...confirmedTestDelivery(quote),
           shippingAddress: { governorate: 'Cairo', city: 'Nasr City', streetAddress: 'Abbas El Akkad' },
           expectedShippingFee: 80,
         },
         paymentMethod: 'bank_transfer',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
       });
       cleanup.orders.push(created.order.id);
       cleanup.users.push(created.customerId);
@@ -365,17 +361,21 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
       const orderBefore: any = await payload.findByID({ collection: 'orders', id: created.order.id, depth: 0 });
       expect(orderBefore.shippingFee).toBe(80);
       expect(orderBefore.appliedTariff?.amount).toBe(80);
-      expect(orderBefore.appliedTariff?.status).toBe('provisional');
+      expect(orderBefore.appliedTariff?.status).toBe('owner_approved');
+      expect(orderBefore.appliedTariff?.configurationReference).toBe(testPilotFulfillment.reference);
       expect(orderBefore.appliedProductionPolicy).toBe('allow_immediate_production');
 
       // 2. Modify CommerceSettings globally: increase Cairo fee to 250, change pickup fee to 50, and switch policy to require_payment_clearance
       await payload.updateGlobal({
         slug: 'commerce-settings',
         data: {
-          cairoAndGizaFee: 250,
-          officePickupFee: 50,
+          pilotFulfillment: {
+            ...testPilotFulfillment,
+            reference: 'test-fixture-v2',
+            delivery: [{ regionCode: 'EG-C', amount: 250, codAllowed: true }],
+            pickup: { ...testPilotFulfillment.pickup, amount: 50 },
+          },
           productionPolicy: 'require_payment_clearance',
-          tariffStatus: 'owner_approved',
         },
         user: superAdminUser,
         overrideAccess: false,
@@ -385,17 +385,15 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
       const orderAfter: any = await payload.findByID({ collection: 'orders', id: created.order.id, depth: 0 });
       expect(orderAfter.shippingFee).toBe(80);
       expect(orderAfter.appliedTariff?.amount).toBe(80);
-      expect(orderAfter.appliedTariff?.status).toBe('provisional');
+      expect(orderAfter.appliedTariff).toEqual(orderBefore.appliedTariff);
       expect(orderAfter.appliedProductionPolicy).toBe('allow_immediate_production');
 
       // Reset
       await payload.updateGlobal({
         slug: 'commerce-settings',
         data: {
-          cairoAndGizaFee: 80,
-          officePickupFee: 0,
+          pilotFulfillment: testPilotFulfillment,
           productionPolicy: 'allow_immediate_production',
-          tariffStatus: 'provisional',
         },
         user: superAdminUser,
         overrideAccess: false,
@@ -431,9 +429,10 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
         cartId: cart.id,
         guestSecret: cart.secret,
         customer: { email, password: 'Password2026!', companyName: 'Clearance Test Corp', contactPerson: 'Manager', phone: '+201022223333' },
-        delivery: { method: 'pickup' },
+        delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
         paymentMethod: 'bank_transfer',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
       });
       cleanup.orders.push(created.order.id);
       cleanup.users.push(created.customerId);
@@ -517,9 +516,10 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
         cartId: cart.id,
         guestSecret: cart.secret,
         customer: { email, password: 'Password2026!', companyName: 'Fast Production Corp', contactPerson: 'Director', phone: '+201033334444' },
-        delivery: { method: 'pickup' },
+        delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
         paymentMethod: 'bank_transfer',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
       });
       cleanup.orders.push(created.order.id);
       cleanup.users.push(created.customerId);
@@ -571,10 +571,12 @@ describe('B2B-06: Custom Pricing, Quotations & Operational Settings Engine', () 
         customer: { email, password: 'Password2026!', companyName: 'COD Corp', contactPerson: 'Buyer', phone: '+201044445555' },
         delivery: {
           method: 'shipping',
+          ...confirmedTestDelivery(quote),
           shippingAddress: { governorate: 'Cairo', city: 'Zamalek', streetAddress: '26th of July' },
         },
         paymentMethod: 'cod',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
       });
       cleanup.orders.push(created.order.id);
       cleanup.users.push(created.customerId);

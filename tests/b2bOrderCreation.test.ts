@@ -1,7 +1,8 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Window } from 'happy-dom';
+import { Window, type HTMLSelectElement } from 'happy-dom';
 import { CartProvider } from '@/modules/cart-checkout/context/CartContext';
 import { CheckoutView } from '@/modules/cart-checkout/ui/CheckoutView';
 
@@ -9,6 +10,7 @@ import { CheckoutView } from '@/modules/cart-checkout/ui/CheckoutView';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment, testBankTransfer, testPilotFulfillment } from './fixtures/pilotFulfillment';
 import { signCartId } from '@/modules/cart-checkout/logic/cartSession';
 import { CART_COOKIE_NAME, getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { createOrderFromCart as createOrderFromCartRaw } from '@/modules/orders/services/orderService';
@@ -20,30 +22,33 @@ import { POST as quoteRoute } from '@/app/api/checkout/quote/route';
 import { GET as cartItemsGet, POST as cartItemsPost } from '@/app/api/cart/items/route';
 
 /**
- * expectedGrandTotal is mandatory on the purchase path. Tests that are not about the approval step
- * behave like a real client: they take the server quote first and confirm that exact total.
- * Tests of the approval step itself use the *Raw functions (no automatic total).
+ * General order tests submit the server quote's confirmation, total and fulfillment selection.
+ * Tests of the approval step itself use the raw handlers to send the exact intended payload.
  */
 const createOrderFromCart = async (payload: any, input: any) => {
-  if (input.expectedGrandTotal === undefined) {
-    let expectedGrandTotal = 0;
+  if (input.expectedQuoteConfirmation === undefined || input.expectedGrandTotal === undefined || !input.delivery?.expectedFulfillmentConfirmation) {
+    let quote: Awaited<ReturnType<typeof buildCheckoutQuote>> | undefined;
     try {
-      const quote = await buildCheckoutQuote(payload, input.cartId, {
+      quote = await buildCheckoutQuote(payload, input.cartId, {
         method: input.delivery?.method === 'pickup' ? 'pickup' : 'shipping',
         governorate: input.delivery?.shippingAddress?.governorate,
       });
-      expectedGrandTotal = quote.grandTotal;
     } catch {
       // Let the service surface its own validation error
     }
-    return createOrderFromCartRaw(payload, { ...input, expectedGrandTotal });
+    return createOrderFromCartRaw(payload, {
+      ...input,
+      expectedGrandTotal: input.expectedGrandTotal ?? quote?.grandTotal ?? 0,
+      expectedQuoteConfirmation: input.expectedQuoteConfirmation ?? quote?.confirmation,
+      delivery: input.delivery && { ...(quote ? confirmedTestDelivery(quote) : {}), ...input.delivery },
+    });
   }
   return createOrderFromCartRaw(payload, input);
 };
 
 const checkoutRoute = async (req: NextRequest) => {
   const body: any = await req.clone().json();
-  if (body.expectedGrandTotal === undefined) {
+  if (body.expectedQuoteConfirmation === undefined || body.expectedGrandTotal === undefined || !body.delivery?.expectedFulfillmentConfirmation) {
     const cartId = readCartId(req.cookies.get(CART_COOKIE_NAME)?.value);
     if (cartId) {
       const payload = await getPayload({ config: configPromise });
@@ -52,9 +57,11 @@ const checkoutRoute = async (req: NextRequest) => {
           method: body.delivery?.method === 'pickup' ? 'pickup' : 'shipping',
           governorate: body.delivery?.shippingAddress?.governorate,
         });
-        body.expectedGrandTotal = quote.grandTotal;
+        body.expectedGrandTotal ??= quote.grandTotal;
+        body.expectedQuoteConfirmation ??= quote.confirmation;
+        if (body.delivery) body.delivery = { ...confirmedTestDelivery(quote), ...body.delivery };
       } catch {
-        body.expectedGrandTotal = 0;
+        body.expectedGrandTotal ??= 0;
       }
     }
     req = new NextRequest(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(body) });
@@ -79,8 +86,10 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
   const cleanupAssetIds: (string | number)[] = [];
   const cleanupProductIds: (string | number)[] = [];
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, { bankTransfer: true });
 
     // 1. Create a physical product with MOQ = 10, customization fee = 30 EGP
     physicalProductA = await payload.create({
@@ -97,6 +106,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProductA.id);
     cleanupProductIds.push(physicalProductA.id);
 
     // 2. Create physical product with multiple variants for MOQ aggregation testing
@@ -148,23 +158,27 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       collection: 'variants',
       data: {
         title: 'Mug - Ruby Red',
+        sku: 'MUG-CORP-RED',
         product: physicalProductWithVariants.id,
         options: [redOption.id],
         priceInEGP: 85,
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'variant', variantRed.id);
 
     variantBlue = await payload.create({
       collection: 'variants',
       data: {
         title: 'Mug - Sapphire Blue',
+        sku: 'MUG-CORP-BLUE',
         product: physicalProductWithVariants.id,
         options: [blueOption.id],
         priceInEGP: 85,
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'variant', variantBlue.id);
 
     // 3. Create digital service package with MOQ = 1
     serviceProduct = await payload.create({
@@ -216,6 +230,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     // Clean up created orders
     for (const orderId of cleanupOrderIds) {
       try {
@@ -484,7 +499,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       expect(order.subtotal).toBe(17000);
       // Total Customization Fees: 30 * 10 = 300 EGP
       expect(order.totalCustomizationFees).toBe(300);
-      // Shipping Fee: 80 EGP (provisional Cairo tariff, D-015)
+      // Shipping Fee: 80 EGP from the synthetic Cairo tariff
       expect(order.shippingFee).toBe(80);
       // Grand Total: 17000 + 300 + 80 = 17380 EGP
       expect(order.amount).toBe(17380);
@@ -646,7 +661,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
   // 4. Delivery Method: Shipping vs Office Pickup (D-015)
   // =========================================================================
   describe('4. Delivery Method Selection & Office Pickup Fulfillment', () => {
-    it('sets fulfillment notes to "Office Pickup" and waives shipping fee for agency office pickup', async () => {
+    it('preserves buyer notes and the configured details for free pickup', async () => {
       const cart = await getOrCreateCart(payload);
       cleanupCartIds.push(cart.id);
 
@@ -681,7 +696,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
 
       expect(result.order.deliveryMethod).toBe('pickup');
       expect(result.order.shippingFee).toBe(0);
-      expect(result.order.fulfillmentNotes).toContain('Office Pickup');
+      expect(result.order.appliedTariff.label).toEqual(testPilotFulfillment.pickup.label);
       expect(result.order.fulfillmentNotes).toContain('Will send company driver');
     });
 
@@ -854,6 +869,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
           _status: 'published',
         },
       });
+      await openFixtureStock(payload, 'product', catalogProd.id);
       cleanupProductIds.push(catalogProd.id);
 
       const cart = await getOrCreateCart(payload);
@@ -902,6 +918,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         id: catalogProd.id,
         data: {
           title: 'MODIFIED AND EXPENSIVE NOTEBOOK',
+          sku: 'UPDATED-NOTE-01',
           basePrice: 500,
           priceInEGP: 500,
           customizationFee: 100,
@@ -919,7 +936,13 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       expect(fetchedOrder.amount).toBe(1200);
       expect(fetchedOrder.items[0].productTitle).toBe('Original Notebook Title');
       expect(fetchedOrder.items[0].unitPrice).toBe(120);
-      expect(fetchedOrder.items[0].lineTotal).toBe(1200);
+      expect(fetchedOrder.items[0]).toMatchObject({ sku: 'ORIG-NOTE-01', quantity: 10, lineTotal: 1200 });
+
+      const laterCart = await getOrCreateCart(payload);
+      cleanupCartIds.push(laterCart.id);
+      await payload.update({ collection: 'carts', id: laterCart.id, data: { items: [{ product: catalogProd.id, quantity: 10 }] } });
+      const laterQuote = await buildCheckoutQuote(payload, laterCart.id, { method: 'pickup' });
+      expect(laterQuote.subtotal).toBe(5000);
     });
   });
 
@@ -1387,6 +1410,170 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         body: body ? JSON.stringify(body) : undefined,
       });
 
+    it('quotes and records COD for the synthetic covered address and rejects the excluded address before creating an order', async () => {
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const covered = { governorate: 'القاهرة (Cairo)', city: 'Nasr City', streetAddress: '1 Fixture Street' };
+      const excluded = { governorate: 'EG-ASN', city: 'Aswan', streetAddress: '2 Fixture Street' };
+      const quoteFor = (governorate: string) => quoteRoute(
+        cookieReq('http://localhost:3000/api/checkout/quote', cookie, 'POST', { delivery: { method: 'shipping', governorate } }),
+      );
+
+      const coveredResponse = await quoteFor(covered.governorate);
+      expect(coveredResponse.status).toBe(200);
+      const coveredQuote = await coveredResponse.json();
+      expect(coveredQuote).toMatchObject({
+        canCheckout: true, codEligible: true, grandTotal: 2080, shippingFee: 80, currency: 'EGP',
+        fulfillment: {
+          selected: { id: 'shipping:EG-C', regionCode: 'EG-C', amount: 80, configurationReference: testPilotFulfillment.reference },
+        },
+      });
+
+      const excludedResponse = await quoteFor(excluded.governorate);
+      expect(excludedResponse.status).toBe(200);
+      expect(await excludedResponse.json()).toMatchObject({
+        canCheckout: false, codEligible: false,
+        fulfillment: { issue: 'UNSUPPORTED_DELIVERY_REGION', selected: null },
+      });
+
+      const purchase = (shippingAddress: typeof covered, confirmation: object) => checkoutRouteRaw(
+        cookieReq('http://localhost:3000/api/checkout/create-order', cookie, 'POST', {
+          customer: customerFor('pilot_address'),
+          delivery: { method: 'shipping', shippingAddress, ...confirmation },
+          paymentMethod: 'cod',
+          expectedGrandTotal: coveredQuote.grandTotal,
+          expectedQuoteConfirmation: coveredQuote.confirmation,
+        }),
+      );
+      const unavailable = await purchase(excluded, {});
+      expect(unavailable.status).toBe(422);
+      expect((await unavailable.json()).error).toContain('FULFILLMENT_UNAVAILABLE');
+      const alteredAddress = await purchase(excluded, confirmedTestDelivery(coveredQuote));
+      expect(alteredAddress.status).toBe(409);
+      expect((await alteredAddress.json()).error).toContain('FULFILLMENT_QUOTE_MISMATCH');
+      expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+
+      const accepted = await purchase(covered, { ...confirmedTestDelivery(coveredQuote), customFee: 1 });
+      expect(accepted.status).toBe(201);
+      const result = await accepted.json();
+      cleanupOrderIds.push(result.orderId);
+      cleanupUserIds.push(result.customerId);
+      expect(await payload.findByID({ collection: 'orders', id: result.orderId })).toMatchObject({
+        amount: 2080, shippingFee: 80, paymentStatus: 'unpaid', deliveryMethod: 'shipping',
+        shippingAddress: { state: covered.governorate, city: covered.city, addressLine1: covered.streetAddress },
+        appliedTariff: { optionId: 'shipping:EG-C', regionCode: 'EG-C', configurationReference: testPilotFulfillment.reference, amount: 80, currency: 'EGP' },
+      });
+    });
+
+    it('blocks provisional delivery and pickup while service-only checkout requires no fulfillment', async () => {
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const delivery = { method: 'shipping', shippingAddress: { governorate: 'EG-C', city: 'Cairo', streetAddress: '3 Fixture Street' } };
+      const shippingQuote = await buildCheckoutQuote(payload, cart.id, { method: 'shipping', governorate: 'EG-C' });
+      const setPilot = (pilotFulfillment: object) => payload.updateGlobal({ slug: 'commerce-settings', data: { pilotFulfillment } });
+      await setPilot({ ...testPilotFulfillment, status: 'provisional' });
+      try {
+        for (const selection of [{ method: 'shipping', governorate: 'EG-C' }, { method: 'pickup' }]) {
+          const response = await quoteRoute(
+            cookieReq('http://localhost:3000/api/checkout/quote', cookie, 'POST', { delivery: selection }),
+          );
+          expect(response.status).toBe(200);
+          expect(await response.json()).toMatchObject({
+            canCheckout: false, fulfillment: { issue: 'NO_APPROVED_FULFILLMENT', options: [], selected: null },
+          });
+        }
+        const blocked = await checkoutRouteRaw(
+          cookieReq('http://localhost:3000/api/checkout/create-order', cookie, 'POST', {
+            customer: customerFor('unapproved_tariff'), delivery, paymentMethod: 'cod', expectedGrandTotal: shippingQuote.grandTotal,
+          }),
+        );
+        expect(blocked.status).toBe(422);
+        expect((await blocked.json()).error).toContain('FULFILLMENT_UNAVAILABLE');
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+
+        await payload.update({ collection: 'carts', id: cart.id, data: { items: [{ product: serviceProduct.id, quantity: 1 }] } });
+        const serviceResponse = await quoteRoute(
+          cookieReq('http://localhost:3000/api/checkout/quote', cookie, 'POST', {}),
+        );
+        expect(serviceResponse.status).toBe(200);
+        const serviceQuote = await serviceResponse.json();
+        expect(serviceQuote).toMatchObject({
+          shippingFee: 0, codEligible: false, canCheckout: true,
+          fulfillment: { required: false, options: [], selected: null },
+        });
+        const bought = await checkoutRouteRaw(
+          cookieReq('http://localhost:3000/api/checkout/create-order', cookie, 'POST', {
+            customer: customerFor('no_fulfillment'), paymentMethod: 'bank_transfer',
+            expectedGrandTotal: serviceQuote.grandTotal, expectedQuoteConfirmation: serviceQuote.confirmation,
+          }),
+        );
+        expect(bought.status).toBe(201);
+        const result = await bought.json();
+        cleanupOrderIds.push(result.orderId);
+        cleanupUserIds.push(result.customerId);
+        expect(await payload.findByID({ collection: 'orders', id: result.orderId })).toMatchObject({
+          shippingFee: 0, deliveryMethod: null, appliedTariff: null,
+        });
+      } finally {
+        await setPilot(testPilotFulfillment);
+      }
+    });
+
+    it('honors pickup availability, fees and terms and rejects a stale option when only its terms change', async () => {
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const setPilot = (pilotFulfillment: object) => payload.updateGlobal({ slug: 'commerce-settings', data: { pilotFulfillment } });
+      const pickupQuote = () => quoteRoute(
+        cookieReq('http://localhost:3000/api/checkout/quote', cookie, 'POST', { delivery: { method: 'pickup' } }),
+      ).then((response) => response.json());
+      const purchase = (quote: Awaited<ReturnType<typeof pickupQuote>>, paymentMethod = 'bank_transfer') => checkoutRouteRaw(
+        cookieReq('http://localhost:3000/api/checkout/create-order', cookie, 'POST', {
+          customer: customerFor('pilot_pickup'), delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
+          paymentMethod, expectedGrandTotal: quote.grandTotal, expectedQuoteConfirmation: quote.confirmation,
+        }),
+      );
+
+      try {
+        await setPilot({ ...testPilotFulfillment, pickup: null });
+        expect(await pickupQuote()).toMatchObject({ canCheckout: false, fulfillment: { options: [], selected: null } });
+        await setPilot(testPilotFulfillment);
+        expect(await pickupQuote()).toMatchObject({ canCheckout: true, shippingFee: 0, codEligible: true });
+
+        const paidPickup = { ...testPilotFulfillment.pickup, amount: 35.5, codAllowed: false };
+        await setPilot({ ...testPilotFulfillment, pickup: paidPickup });
+        const previous = await pickupQuote();
+        expect(previous).toMatchObject({ canCheckout: true, shippingFee: 35.5, codEligible: false });
+        const blockedCod = await purchase(previous, 'cod');
+        expect(blockedCod.status).toBe(422);
+        expect((await blockedCod.json()).error).toContain('COD_PROHIBITED_FOR_FULFILLMENT');
+
+        const instructions = { ...paidPickup.instructions, en: 'Revised test pickup terms' };
+        await setPilot({ ...testPilotFulfillment, pickup: { ...paidPickup, instructions } });
+        const stale = await purchase(previous);
+        expect(stale.status).toBe(409);
+        const conflict = await stale.json();
+        expect(conflict.error).toContain('FULFILLMENT_QUOTE_MISMATCH');
+        expect(conflict.updatedQuote).toMatchObject({
+          grandTotal: previous.grandTotal,
+          fulfillment: { selected: { pickup: { address: paidPickup.address, instructions } } },
+        });
+        expect(conflict.updatedQuote.fulfillment.selected.confirmation).not.toBe(previous.fulfillment.selected.confirmation);
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+
+        const bought = await purchase(conflict.updatedQuote);
+        expect(bought.status).toBe(201);
+        const result = await bought.json();
+        cleanupOrderIds.push(result.orderId);
+        cleanupUserIds.push(result.customerId);
+        expect(await payload.findByID({ collection: 'orders', id: result.orderId })).toMatchObject({
+          shippingFee: 35.5, deliveryMethod: 'pickup',
+          appliedTariff: { optionId: 'pickup:test-office', pickup: { address: paidPickup.address, instructions } },
+        });
+      } finally {
+        await setPilot(testPilotFulfillment);
+      }
+    });
+
     it('server quote matches the saved order shipping fee and total; stale or client-set fees are rejected/ignored', async () => {
       const cart = await makeCartWithItem();
       const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
@@ -1399,8 +1586,8 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       expect(quoteRes.status).toBe(200);
       const quote = await quoteRes.json();
       expect(quote.shippingFee).toBe(80);
-      expect(quote.isProvisional).toBe(true);
-      expect(quote.tariffScheduleStatus).toBe('pending_owner_tariff_approval');
+      expect(quote.isProvisional).toBe(false);
+      expect(quote.tariffScheduleStatus).toBe('owner_approved');
 
       const shippingAddress = { governorate: 'Cairo', city: 'Maadi', streetAddress: 'Street 9' };
 
@@ -1617,6 +1804,206 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         body: JSON.stringify(body),
       });
 
+    it('rejects an old quote when product and customization prices change but the grand total stays the same', async () => {
+      const cart = await makeCartWithItem();
+      await payload.update({
+        collection: 'carts',
+        id: cart.id,
+        data: { items: [{ product: physicalProductA.id, quantity: 10, printingNotes: 'One-color logo' }] },
+      });
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const delivery = { method: 'pickup' };
+      const quoteResponse = await quoteRoute(post('http://localhost:3000/api/checkout/quote', cookie, { delivery }));
+      expect(quoteResponse.status).toBe(200);
+      const quote = await quoteResponse.json();
+      expect(quote).toMatchObject({ subtotal: 2000, totalCustomizationFees: 300, grandTotal: 2300 });
+      expect(quote.confirmation).toEqual(expect.any(String));
+      const buyer = customerFor('equal_total');
+      const submit = (confirmation: string | undefined, total = quote.grandTotal) => checkoutRouteRaw(
+        post('http://localhost:3000/api/checkout/create-order', cookie, {
+          customer: buyer,
+          delivery: { ...delivery, ...confirmedTestDelivery(quote) },
+          paymentMethod: 'cod',
+          expectedGrandTotal: total,
+          expectedQuoteConfirmation: confirmation,
+        }),
+      );
+      const missing = await submit(undefined);
+      expect(missing.status).toBe(400);
+      expect((await missing.json()).error).toContain('EXPECTED_QUOTE_CONFIRMATION_REQUIRED');
+      const fabricated = await submit(quote.confirmation.replace(/^./, (first: string) => first === 'a' ? 'b' : 'a'));
+      expect(fabricated.status).toBe(409);
+      const tamperedTotal = await submit(quote.confirmation, 1);
+      expect(tamperedTotal.status).toBe(409);
+      expect((await tamperedTotal.json()).updatedQuote.grandTotal).toBe(2300);
+
+      try {
+        await payload.update({
+          collection: 'products',
+          id: physicalProductA.id,
+          data: { basePrice: 210, priceInEGP: 210, customizationFee: 20 },
+        });
+
+        const stale = await submit(quote.confirmation);
+        expect(stale.status).toBe(409);
+        const conflict = await stale.json();
+        expect(conflict.error).toContain('QUOTE_MISMATCH');
+        expect(conflict.updatedQuote).toMatchObject({
+          subtotal: 2100,
+          totalCustomizationFees: 200,
+          grandTotal: quote.grandTotal,
+        });
+        expect(conflict.updatedQuote.confirmation).toEqual(expect.any(String));
+        expect(conflict.updatedQuote.confirmation).not.toBe(quote.confirmation);
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+        expect((await payload.find({ collection: 'users', where: { email: { equals: buyer.email } } })).totalDocs).toBe(0);
+
+        const accepted = await submit(conflict.updatedQuote.confirmation);
+        expect(accepted.status).toBe(201);
+        const result = await accepted.json();
+        cleanupOrderIds.push(result.orderId);
+        cleanupUserIds.push(result.customerId);
+        expect(await payload.findByID({ collection: 'orders', id: result.orderId })).toMatchObject({
+          amount: 2300,
+          grandTotalPiastres: 230000,
+          totalCustomizationFees: 200,
+          items: [expect.objectContaining({ unitPrice: 210, customizationFee: 20, lineTotal: 2300 })],
+        });
+      } finally {
+        await payload.update({
+          collection: 'products',
+          id: physicalProductA.id,
+          data: { basePrice: 200, priceInEGP: 200, customizationFee: 30 },
+        });
+      }
+    });
+
+    it('reconfirms a shipping change at the same grand total, preserves a previous order and replays once', async () => {
+      const shippingAddress = { governorate: 'EG-C', city: 'Nasr City', streetAddress: '3 Fixture Street' };
+      const selection = { method: 'shipping', governorate: shippingAddress.governorate, optionId: 'shipping:EG-C' };
+      const getQuote = async (cookie: string) => {
+        const res = await quoteRoute(post('http://localhost:3000/api/checkout/quote', cookie, { delivery: selection }));
+        expect(res.status).toBe(200);
+        return res.json();
+      };
+      const previousCart = await makeCartWithItem();
+      const previousCookie = `${CART_COOKIE_NAME}=${signCartId(previousCart.id)}`;
+      const previousQuote = await getQuote(previousCookie);
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const quote = await getQuote(cookie);
+      const buyer = customerFor('shipping_drift');
+      const operationKey = `shipping-drift-${cart.id}`;
+      const submit = (
+        cartCookie: string,
+        submittedQuote: Awaited<ReturnType<typeof getQuote>>,
+        customer: ReturnType<typeof customerFor>,
+        key: string,
+      ) => checkoutRouteRaw(post('http://localhost:3000/api/checkout/create-order', cartCookie, {
+        customer,
+        delivery: {
+          method: selection.method,
+          shippingAddress,
+          ...confirmedTestDelivery(submittedQuote),
+          expectedShippingFee: submittedQuote.shippingFee,
+          customFee: 1,
+        },
+        paymentMethod: 'cod',
+        expectedGrandTotal: submittedQuote.grandTotal,
+        expectedQuoteConfirmation: submittedQuote.confirmation,
+      }, { 'Idempotency-Key': key }));
+
+      expect(quote).toMatchObject({ subtotal: 2000, shippingFee: 80, grandTotal: 2080 });
+      const wrongCart = await submit(cookie, previousQuote, buyer, operationKey);
+      expect(wrongCart.status).toBe(409);
+      expect((await wrongCart.json()).updatedQuote.confirmation).toBe(quote.confirmation);
+      const previousAccepted = await submit(
+        previousCookie, previousQuote, customerFor('old_shipping'), `old-shipping-${previousCart.id}`,
+      );
+      expect(previousAccepted.status).toBe(201);
+      const previousOrder = await previousAccepted.json();
+      cleanupOrderIds.push(previousOrder.orderId);
+      cleanupUserIds.push(previousOrder.customerId);
+
+      const setPilot = (pilotFulfillment: unknown) => payload.updateGlobal({
+        slug: 'commerce-settings',
+        data: { pilotFulfillment },
+      });
+      try {
+        await setFlaskPrice(198);
+        await setPilot({
+          ...testPilotFulfillment,
+          reference: 'test-fixture-v2',
+          delivery: testPilotFulfillment.delivery.map((rate) => rate.regionCode === 'EG-C'
+            ? { ...rate, amount: 100 }
+            : rate),
+        });
+
+        const stale = await submit(cookie, quote, buyer, operationKey);
+        expect(stale.status).toBe(409);
+        const { updatedQuote } = await stale.json();
+        expect(updatedQuote).toMatchObject({ subtotal: 1980, shippingFee: 100, grandTotal: quote.grandTotal });
+        expect(updatedQuote.confirmation).toEqual(expect.any(String));
+        expect(updatedQuote.confirmation).not.toBe(quote.confirmation);
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+
+        const accepted = await submit(cookie, updatedQuote, buyer, operationKey);
+        expect(accepted.status).toBe(201);
+        const result = await accepted.json();
+        cleanupOrderIds.push(result.orderId);
+        cleanupUserIds.push(result.customerId);
+        expect(await payload.findByID({ collection: 'orders', id: result.orderId })).toMatchObject({
+          amount: 2080, shippingFee: 100, paymentMethod: 'cod', paymentStatus: 'unpaid',
+          appliedTariff: { amount: 100, configurationReference: 'test-fixture-v2' },
+          items: [expect.objectContaining({ unitPrice: 198 })],
+        });
+        expect(await payload.findByID({ collection: 'orders', id: previousOrder.orderId })).toMatchObject({
+          amount: 2080, shippingFee: 80,
+          appliedTariff: { amount: 80, configurationReference: testPilotFulfillment.reference },
+          items: [expect.objectContaining({ unitPrice: 200 })],
+        });
+
+        const retry = await submit(cookie, updatedQuote, buyer, operationKey);
+        expect(retry.status).toBe(200);
+        expect(await retry.json()).toMatchObject({ orderId: result.orderId, isIdempotentReplay: true });
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(1);
+      } finally {
+        await setFlaskPrice(200);
+        await setPilot(testPilotFulfillment);
+      }
+    });
+
+    it('excludes unconfigured bank transfer from a quote and refuses direct submission of that payment method', async () => {
+      const cart = await makeCartWithItem();
+      const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
+      const delivery = { method: 'pickup' };
+      try {
+        await payload.updateGlobal({
+          slug: 'commerce-settings',
+          data: { bankDetailsStatus: 'pending_configuration' },
+        });
+        const response = await quoteRoute(post('http://localhost:3000/api/checkout/quote', cookie, { delivery }));
+        expect(response.status).toBe(200);
+        const quote = await response.json();
+        expect(quote).toMatchObject({
+          canCheckout: true, paymentMethods: ['cod'], bankDetails: { status: 'pending_configuration', accountNumber: null },
+        });
+
+        const unavailable = await checkoutRouteRaw(post('http://localhost:3000/api/checkout/create-order', cookie, {
+          customer: customerFor('disabled_bank'),
+          delivery: { ...delivery, ...confirmedTestDelivery(quote) },
+          paymentMethod: 'bank_transfer',
+          expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
+        }));
+        expect(unavailable.status).toBe(422);
+        expect((await unavailable.json()).error).toContain('BANK_TRANSFER_UNAVAILABLE');
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+      } finally {
+        await payload.updateGlobal({ slug: 'commerce-settings', data: testBankTransfer });
+      }
+    });
+
     it('rejects with 409 and a refreshed quote when a product price changes after the quote, then accepts the updated total', async () => {
       const cart = await makeCartWithItem();
       const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
@@ -1632,12 +2019,13 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         // Price changes between display and confirmation
         await setFlaskPrice(260);
 
-        const staleRes = await checkoutRoute(
+        const staleRes = await checkoutRouteRaw(
           post('http://localhost:3000/api/checkout/create-order', cookie, {
             customer: customerFor('drift'),
-            delivery: { method: 'pickup' },
+            delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
             paymentMethod: 'bank_transfer',
             expectedGrandTotal: quote.grandTotal,
+            expectedQuoteConfirmation: quote.confirmation,
           })
         );
         expect(staleRes.status).toBe(409);
@@ -1648,12 +2036,13 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
 
         // Re-confirm with the refreshed total: saved amount equals the displayed amount
-        const okRes = await checkoutRoute(
+        const okRes = await checkoutRouteRaw(
           post('http://localhost:3000/api/checkout/create-order', cookie, {
             customer: customerFor('drift_ok'),
-            delivery: { method: 'pickup' },
+            delivery: { method: 'pickup', ...confirmedTestDelivery(stale.updatedQuote) },
             paymentMethod: 'bank_transfer',
             expectedGrandTotal: stale.updatedQuote.grandTotal,
+            expectedQuoteConfirmation: stale.updatedQuote.confirmation,
           })
         );
         expect(okRes.status).toBe(201);
@@ -1663,6 +2052,39 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         const saved = await payload.findByID({ collection: 'orders', id: ok.orderId });
         expect(Number(saved.amount ?? saved.total)).toBe(stale.updatedQuote.grandTotal);
       } finally {
+        await setFlaskPrice(200);
+      }
+    });
+
+    it('rolls back when a catalog price changes inside final order persistence', async () => {
+      const cart = await makeCartWithItem();
+      const quote = await buildCheckoutQuote(payload, cart.id, { method: 'pickup' });
+      const realCreate = payload.create.bind(payload);
+      const buyer = customerFor('persist_drift');
+      const create = vi.spyOn(payload, 'create').mockImplementation(async (options: any) => {
+        if (options.collection === 'orders') await setFlaskPrice(260);
+        return realCreate(options);
+      });
+
+      try {
+        await expect(createOrderFromCartRaw(payload, {
+          cartId: cart.id,
+          guestSecret: cart.secret,
+          customer: buyer,
+          delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
+          paymentMethod: 'bank_transfer',
+          expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
+        })).rejects.toMatchObject({ statusCode: 409, message: expect.stringContaining('PRICE_QUOTE_MISMATCH') });
+
+        expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
+        expect((await payload.find({ collection: 'users', where: { email: { equals: buyer.email } } })).totalDocs).toBe(0);
+        const persistedCart = await payload.findByID({ collection: 'carts', id: cart.id });
+        expect(persistedCart.purchasedAt ?? null).toBeNull();
+        const revised = await buildCheckoutQuote(payload, cart.id, { method: 'pickup' });
+        expect(revised.grandTotal).toBe(2600);
+      } finally {
+        create.mockRestore();
         await setFlaskPrice(200);
       }
     });
@@ -1683,6 +2105,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       const cart = await makeCartWithItem();
       const cookie = `${CART_COOKIE_NAME}=${signCartId(cart.id)}`;
 
+      const checkoutStatuses: number[] = [];
       global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
         const method = init?.method || 'GET';
         const req = new NextRequest(`http://localhost:3000${url}`, {
@@ -1692,7 +2115,11 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         });
         if (url.startsWith('/api/cart/items')) return cartItemsGet(req);
         if (url.startsWith('/api/checkout/quote')) return quoteRoute(req);
-        if (url.startsWith('/api/checkout/create-order')) return checkoutRoute(req);
+        if (url.startsWith('/api/checkout/create-order')) {
+          const response = await checkoutRouteRaw(req);
+          checkoutStatuses.push(response.status);
+          return response;
+        }
         throw new Error(`Unexpected fetch ${url}`);
       }) as any;
 
@@ -1733,27 +2160,29 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
           );
           await wait(50);
         });
-        await waitFor(() => text().includes('2,080'));
-
-        // Items and totals come from the server quote (shipping default = Cairo provisional tariff)
+        await waitFor(() => text().includes('Test pickup'));
         expect(text()).toContain('B2B Thermal Flask Executive');
-        expect(text()).toContain('80 EGP (provisional D-015)');
-        expect(text()).toContain('2,080');
-        expect(text()).not.toContain('Final Grand Total');
+        expect(container.querySelector('input[name="delivery"][value="shipping:EG-C"]')).toBeNull();
 
         // Select pickup from the component
-        const pickup = container.querySelector('input[name="delivery"][value="pickup"]') as any;
-        const shipping = container.querySelector('input[name="delivery"][value="shipping"]') as any;
+        const pickup = container.querySelector('input[name="delivery"][value="pickup:test-office"]') as any;
         await act(async () => {
           pickup.click();
           await wait(50);
         });
-        await waitFor(() => text().includes('Free (Pickup)') && text().includes('2,000'));
+        await waitFor(() => text().includes('Test pickup terms'));
         expect(pickup.checked).toBe(true);
-        expect(text()).toContain('Free (Pickup)');
+        expect(text()).toContain('Test pickup address');
         expect(text()).toContain('2,000');
 
-        // Back to shipping
+        // Choose an approved governorate, then the returned shipping option.
+        await act(async () => {
+          const select = container.querySelector<HTMLSelectElement>('#checkout-governorate')!;
+          select.value = 'EG-C';
+          select.dispatchEvent(new window.Event('change', { bubbles: true }));
+        });
+        await waitFor(() => text().includes('Courier delivery'));
+        const shipping = container.querySelector('input[name="delivery"][value="shipping:EG-C"]') as any;
         await act(async () => {
           shipping.click();
           await wait(50);
@@ -1762,11 +2191,13 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
         expect(shipping.checked).toBe(true);
         expect(text()).toContain('2,080');
 
-        // Fill the form
+        const email = `view_${Date.now()}@mwheba.test`;
+        const street = '3 Fixture Street';
         await act(async () => {
           container.querySelectorAll('input, textarea').forEach((el: any) => {
             if (el.type === 'radio' || el.type === 'checkbox') return;
-            if (el.type === 'email') setValue(el, `view_${Date.now()}@mwheba.test`);
+            if (el.type === 'email') setValue(el, email);
+            else if (el.getAttribute('autocomplete') === 'address-line1') setValue(el, street);
             else if (el.type === 'password') setValue(el, 'SecurePassword2026!');
             else if (el.type === 'tel') setValue(el, '+201012345678');
             else if (!el.value) setValue(el, 'Test Value');
@@ -1781,12 +2212,15 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
           form.dispatchEvent(new window.Event('submit', { bubbles: true, cancelable: true }));
           await wait(50);
         });
-        await waitFor(() => text().includes('Updated total'));
+        await waitFor(() => text().includes('Your quote changed.'));
 
         // 409: nothing saved, refreshed server total shown
         expect((await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs).toBe(0);
         expect(text()).toContain('2,680');
-        expect(text()).toContain('Updated total');
+        expect(container.querySelector('button[type="submit"]')?.textContent).toContain('Confirm order at updated total');
+        expect(container.querySelector('input[type="email"]')?.getAttribute('value')).toBe(email);
+        expect(container.querySelector('input[autocomplete="address-line1"]')?.getAttribute('value')).toBe(street);
+        expect(checkoutStatuses).toEqual([409]);
 
         // Re-confirm with the refreshed total
         await act(async () => {
@@ -1794,6 +2228,8 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
           await wait(50);
         });
         await waitFor(async () => (await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs === 1);
+        await waitFor(() => text().includes('View order details') || text().includes('Sign in to view your order'));
+        expect(checkoutStatuses).toEqual([409, 201]);
         const orders = await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } });
         expect(orders.totalDocs).toBe(1);
         expect(Number(orders.docs[0].amount ?? (orders.docs[0] as any).total)).toBe(2680);
@@ -1862,9 +2298,10 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       const res = await checkoutRouteRaw(
         jsonReq('http://localhost:3000/api/checkout/create-order', cookie, {
           customer: customerFor('notes_only'),
-          delivery,
+          delivery: { ...delivery, ...confirmedTestDelivery(quote) },
           paymentMethod: 'bank_transfer',
           expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
         })
       );
       expect(res.status).toBe(201);
@@ -1940,9 +2377,18 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
           root.render(React.createElement(CartProvider, null, React.createElement(CheckoutView, { locale: 'en' })));
           await wait(50);
         });
-        // 2000 base + 300 notes-only customization + 80 provisional Cairo shipping
+        await waitFor(() => Boolean(container.querySelector('#checkout-governorate')));
+        await act(async () => {
+          const select = container.querySelector<HTMLSelectElement>('#checkout-governorate')!;
+          select.value = 'EG-C';
+          select.dispatchEvent(new window.Event('change', { bubbles: true }));
+        });
+        await waitFor(() => text().includes('Courier delivery'));
+        const shipping = container.querySelector('input[name="delivery"][value="shipping:EG-C"]') as any;
+        await act(async () => shipping.click());
+        // 2000 base + 300 notes-only customization + 80 synthetic Cairo shipping
         await waitFor(() => text().includes('2,380'));
-        expect(text()).toContain('Branded (+300 EGP)');
+        expect(text()).toContain('Customization (+300 EGP)');
 
         await act(async () => {
           container.querySelectorAll('input, textarea').forEach((el: any) => {
@@ -1961,6 +2407,7 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
           await wait(50);
         });
         await waitFor(async () => (await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).totalDocs === 1);
+        await waitFor(() => text().includes('View order details') || text().includes('Sign in to view your order'));
 
         const order: any = (await payload.find({ collection: 'orders', where: { cart: { equals: cart.id } } })).docs[0];
         cleanupOrderIds.push(order.id);
@@ -2018,7 +2465,12 @@ describe('B2B-04: Mixed Cart, Inline Checkout Registration & Order Snapshots', (
       await payload.update({ collection: 'products', id: physicalProductA.id, data: { basePrice: 270, priceInEGP: 270 } });
       try {
         const stale = await checkoutRouteRaw(
-          jsonReq('http://localhost:3000/api/checkout/create-order', cookie, { ...baseBody, expectedGrandTotal: quote.grandTotal })
+          jsonReq('http://localhost:3000/api/checkout/create-order', cookie, {
+            ...baseBody,
+            delivery: { ...baseBody.delivery, ...confirmedTestDelivery(quote) },
+            expectedGrandTotal: quote.grandTotal,
+            expectedQuoteConfirmation: quote.confirmation,
+          })
         );
         expect(stale.status).toBe(409);
         expect((await stale.json()).error).toContain('PRICE_QUOTE_MISMATCH');

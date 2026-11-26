@@ -1,3 +1,4 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
@@ -81,33 +82,20 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
       context: { isSystemSeed: true },
     });
 
-    // 4. Fetch a physical product for cart line item binding tests
-    const prods = await payload.find({
+    testProduct = await payload.create({
       collection: 'products',
-      where: {
-        and: [
-          { productType: { equals: 'physical' } },
-          { _status: { equals: 'published' } },
-        ],
+      data: {
+        sku: 'B2B02-BOTTLE',
+        title: 'Corporate Stainless Bottle',
+        slug: 'corp-bottle-' + Date.now(),
+        productType: 'physical',
+        minOrderQuantity: 10,
+        customizationFee: 15,
+        basePrice: 250,
+        _status: 'published',
       },
-      limit: 1,
     });
-    if (prods.docs?.[0]) {
-      testProduct = prods.docs[0];
-    } else {
-      testProduct = await payload.create({
-        collection: 'products',
-        data: {
-          title: 'Corporate Stainless Bottle',
-          slug: `corp-bottle-${Date.now()}`,
-          productType: 'physical',
-          minOrderQuantity: 10,
-          customizationFee: 15,
-          basePrice: 250,
-          _status: 'published',
-        },
-      });
-    }
+    await openFixtureStock(payload, 'product', testProduct.id);
   });
 
   afterAll(async () => {
@@ -124,6 +112,8 @@ describe('B2B-03: Line-Level Artwork Asset Management & Private Storage Pipeline
         // Ignored
       }
     }
+
+    if (testProduct) await payload.delete({ collection: 'products', id: testProduct.id });
 
     // Cleanup physical files written to private storage during tests
     for (const filePath of testFilesToClean) {

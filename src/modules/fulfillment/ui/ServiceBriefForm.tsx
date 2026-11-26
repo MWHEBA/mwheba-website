@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
+import { accountLoginHref } from '@/modules/identity/logic/accountPaths';
 import { Badge, Button } from '@/shared/ui/primitives';
 
 export interface BriefJobSummary {
@@ -49,10 +51,6 @@ export function ServiceBriefForm({ locale, orderId, orderNumber, authenticated, 
   const isArabic = locale === 'ar';
   const pendingJobs = jobs.filter((job) => job.status === 'pending_brief');
 
-  const [loginEmail, setLoginEmail] = useState('');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   // Derived from props so a late-arriving job list (e.g. after sign-in) is never ignored
   const jobId = pendingJobs.some((job) => job.id === selectedJobId) ? selectedJobId : pendingJobs[0]?.id ?? null;
@@ -64,26 +62,6 @@ export function ServiceBriefForm({ locale, orderId, orderNumber, authenticated, 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsLoggingIn(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/users/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
-      });
-      if (!res.ok) throw new Error(isArabic ? 'بيانات الدخول غير صحيحة.' : 'Invalid email or password.');
-      window.location.reload();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setIsLoggingIn(false);
-    }
-  };
 
   const uploadAttachment = async (file: File): Promise<string> => {
     const form = new FormData();
@@ -151,6 +129,11 @@ export function ServiceBriefForm({ locale, orderId, orderNumber, authenticated, 
   return (
     <div className="container" style={{ paddingBlock: '4rem 6rem', maxWidth: '760px' }} dir={isArabic ? 'rtl' : 'ltr'}>
       <header style={{ marginBottom: '2rem' }}>
+        {authenticated && (
+          <div style={{ marginBlockEnd: '0.75rem' }}>
+            <Link href={`/${locale}/account/orders/${orderId}`}>{isArabic ? 'العودة إلى تفاصيل الطلب' : 'Back to order details'}</Link>
+          </div>
+        )}
         <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--brand-primary-dark)' }}>
           {isArabic ? 'استقبال مشروع خدمة' : 'SERVICE INTAKE'}
           {orderNumber ? ` // ${orderNumber}` : ''}
@@ -166,30 +149,17 @@ export function ServiceBriefForm({ locale, orderId, orderNumber, authenticated, 
       </header>
 
       {!authenticated && (
-        <form onSubmit={handleLogin} style={cardStyle}>
+        <section style={cardStyle}>
           <h2 style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--brand-primary-dark)', margin: '0 0 0.5rem' }}>
             {isArabic ? 'سجّل الدخول لإرسال الـ Brief' : 'Sign in to submit your brief'}
           </h2>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem', marginTop: 0 }}>
             {isArabic ? 'استخدم الحساب الذي أنشأته عند تأكيد الطلب.' : 'Use the account you created when you placed the order.'}
           </p>
-          <div style={{ display: 'grid', gap: '0.75rem' }}>
-            <div>
-              <label style={labelStyle}>{isArabic ? 'البريد الإلكتروني' : 'Email'}</label>
-              <input type="email" required value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} style={fieldStyle} />
-            </div>
-            <div>
-              <label style={labelStyle}>{isArabic ? 'كلمة المرور' : 'Password'}</label>
-              <input type="password" required value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} style={fieldStyle} />
-            </div>
-          </div>
-          {errorBox}
-          <div style={{ marginTop: '1rem' }}>
-            <Button variant="primary" size="md" type="submit" loading={isLoggingIn} loadingText={isArabic ? 'جاري الدخول...' : 'Signing in...'}>
-              {isArabic ? 'دخول' : 'Sign in'}
-            </Button>
-          </div>
-        </form>
+          <Link href={accountLoginHref(locale, `/${locale}/account/orders/${orderId}/brief`)} className="btn-primary btn-md" prefetch={false}>
+            {isArabic ? 'تسجيل الدخول' : 'Sign in'}
+          </Link>
+        </section>
       )}
 
       {authenticated && isSubmitted && (

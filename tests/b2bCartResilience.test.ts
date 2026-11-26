@@ -1,5 +1,6 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { getPayload, type Payload } from 'payload';
+import { getPayload, handleEndpoints, type Payload } from 'payload';
 import configPromise from '../src/payload.config';
 import {
   getOrCreateCart,
@@ -18,6 +19,7 @@ import {
   executeWithOperationRetry,
 } from '../src/modules/cart-checkout/logic/idempotency';
 import { POST as validateCheckoutRoute } from '../src/app/api/cart/validate-checkout/route';
+import { POST as signArtworkRoute } from '../src/app/api/customization/artwork/[id]/sign/route';
 import {
   POST as cartItemsPostRoute,
   GET as cartItemsGetRoute,
@@ -29,9 +31,11 @@ import { NextRequest } from 'next/server';
 import React, { act } from 'react';
 import { renderToString } from 'react-dom/server';
 import { createRoot } from 'react-dom/client';
-import { Window } from 'happy-dom';
+import { Window, type HTMLButtonElement, type HTMLSelectElement } from 'happy-dom';
 import { sql } from '@payloadcms/db-postgres';
 import { CartProvider, useCart } from '../src/modules/cart-checkout/context/CartContext';
+import { readPublishedProduct } from '../src/modules/catalog/services/publishedCatalog';
+import { ProductDetailView } from '../src/modules/catalog/ui/ProductDetailView';
 import { up as run160000Migration } from '../src/migrations/20261103_160000_add_cart_idempotency';
 import { up as runPreserveGuestSecretsMigration } from '../src/migrations/20261103_170000_preserve_guest_secrets_and_schema';
 
@@ -42,6 +46,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
   const createdVariantTypeIds: (string | number)[] = [];
   const createdVariantOptionIds: (string | number)[] = [];
   const createdCartIds: (string | number)[] = [];
+  const createdUserIds: number[] = [];
+  const createdArtworkIds: number[] = [];
 
   let physicalProductA: any;
   let physicalProductB: any;
@@ -119,6 +125,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
     variantA1 = await payload.create({
       collection: 'variants',
       data: {
+        sku: `B2B03-BLACK-${Date.now()}`,
         title: 'كوب حراري - أسود مطفي',
         product: physicalProductA.id,
         options: [blackOption.id],
@@ -126,11 +133,13 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'variant', variantA1.id);
     createdVariantIds(variantA1.id);
 
     variantA2 = await payload.create({
       collection: 'variants',
       data: {
+        sku: `B2B03-BLUE-${Date.now()}`,
         title: 'كوب حراري - أزرق بترولي',
         product: physicalProductA.id,
         options: [blueOption.id],
@@ -138,12 +147,14 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'variant', variantA2.id);
     createdVariantIds(variantA2.id);
 
     // 4. Create Product B (Physical Leather Notebook, MOQ 10, customization fee 20 EGP)
     physicalProductB = await payload.create({
       collection: 'products',
       data: {
+        sku: `B2B03-NOTEBOOK-${Date.now()}`,
         title: 'دفتر جلدي فاخر (Product B)',
         slug: `prod-b-notebook-${Date.now()}`,
         productType: 'physical',
@@ -154,6 +165,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProductB.id);
     createdProductIds.push(physicalProductB.id);
 
     // 5. Create Service Product (Digital Package, MOQ 1)
@@ -172,11 +184,19 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
   }, 30000);
 
   afterAll(async () => {
+    for (const id of createdArtworkIds) {
+      await payload.delete({ collection: 'artwork-assets', id, context: { isTrustedUpload: true } });
+    }
+
     // Clean up created carts
     for (const cartId of createdCartIds) {
       try {
         await payload.delete({ collection: 'carts', id: cartId });
       } catch {}
+    }
+
+    for (const id of createdUserIds) {
+      await payload.delete({ collection: 'users', id });
     }
 
     // Clean up created products and categories
@@ -354,6 +374,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       // Add only 5 units of Product A
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
+        variantId: variantA1.id,
         quantity: 5,
         operationKey: generateOperationKey('add'),
       });
@@ -385,6 +406,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       // Add 10 units of Product A
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
+        variantId: variantA1.id,
         quantity: 10,
         operationKey: generateOperationKey('add'),
       });
@@ -457,6 +479,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       await expect(
         addItemToCart(payload, cart.id, {
           productId: physicalProductA.id,
+          variantId: variantA1.id,
           quantity: 5,
         } as any)
       ).rejects.toThrow(/MISSING_OPERATION_KEY/);
@@ -467,6 +490,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productId: physicalProductA.id,
+          variantId: variantA1.id,
           quantity: 5,
         }),
       });
@@ -487,6 +511,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productId: physicalProductA.id,
+          variantId: variantA1.id,
           quantity: 10,
           operationKey: generateOperationKey('add'),
         }),
@@ -596,6 +621,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const opKeyAdd = generateOperationKey('add');
       await addItemToCart(payload, guestCart.id, {
         productId: physicalProductA.id,
+        variantId: variantA1.id,
         quantity: 10,
         operationKey: opKeyAdd,
       });
@@ -773,6 +799,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       // Add item
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
+        variantId: variantA1.id,
         quantity: 10,
         operationKey: generateOperationKey('add'),
       });
@@ -853,6 +880,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const cart = await getOrCreateCart(payload);
       createdCartIds.push(cart.id);
       const signedCookie = signCartId(cart.id);
+      let mutation = Promise.resolve();
 
       global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
         const method = init?.method || 'GET';
@@ -886,8 +914,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
             'button',
             {
               id: 'btn-add',
-              onClick: async () => {
-                await addItem({ productId: physicalProductA.id, quantity: 10 });
+              onClick: () => {
+                mutation = addItem({ productId: physicalProductA.id, variantId: variantA1.id, quantity: 10 });
               },
             },
             'Add 10'
@@ -896,8 +924,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
             'button',
             {
               id: 'btn-inc',
-              onClick: async () => {
-                if (items[0]) await updateQuantity(items[0].id, 5);
+              onClick: () => {
+                if (items[0]) mutation = updateQuantity(items[0].id, 5);
               },
             },
             'Inc 5'
@@ -906,8 +934,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
             'button',
             {
               id: 'btn-remove',
-              onClick: async () => {
-                if (items[0]) await removeItem(items[0].id);
+              onClick: () => {
+                if (items[0]) mutation = removeItem(items[0].id);
               },
             },
             'Remove'
@@ -939,7 +967,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         const btnAdd = container.querySelector('#btn-add') as any;
         await act(async () => {
           btnAdd.click();
-          await new Promise((resolve) => setTimeout(resolve, 80));
+          await mutation;
         });
 
         expect(itemCountEl.textContent).toBe('1');
@@ -951,7 +979,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         const btnInc = container.querySelector('#btn-inc') as any;
         await act(async () => {
           btnInc.click();
-          await new Promise((resolve) => setTimeout(resolve, 80));
+          await mutation;
         });
 
         expect(itemCountEl.textContent).toBe('1');
@@ -962,7 +990,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         const btnRemove = container.querySelector('#btn-remove') as any;
         await act(async () => {
           btnRemove.click();
-          await new Promise((resolve) => setTimeout(resolve, 80));
+          await mutation;
         });
 
         expect(itemCountEl.textContent).toBe('0');
@@ -978,7 +1006,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       }
     });
 
-    it('handles dropped response on first guest add: initializes signed session before mutation, reuses session and operationKey on retry, ensuring strictly ONE cart and ONE line item in PostgreSQL', async () => {
+    it('adds published variant and simple products from their product pages and reloads after a lost response', async () => {
       (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
       const window = new Window();
       const document = window.document;
@@ -988,6 +1016,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
 
       global.window = window as any;
       global.document = document as any;
+      vi.stubGlobal('self', window);
 
       const container = document.createElement('div');
       document.body.appendChild(container);
@@ -1001,13 +1030,17 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       // Simulate a guest with NO initial cookie: session is initialized before mutation,
       // and network interruption occurs on first POST response
       let postAttemptCount = 0;
+      let deliveredPostCount = 0;
       let capturedFirstOpKey = '';
       let serverCreatedCartId: number | null = null;
       let simulatedClientCookie = '';
+      const publishedProduct = await readPublishedProduct(payload, 'en', physicalProductA.slug);
+      const simpleProduct = await readPublishedProduct(payload, 'en', physicalProductB.slug);
+      if (!publishedProduct || !simpleProduct) throw new Error('Published product fixture not found');
 
       global.fetch = vi.fn().mockImplementation(async (url: string, init?: any) => {
         // Handle session initialization: GET /api/cart/items?init=true
-        if (url.includes('/api/cart/items') && (!init || init.method === 'GET')) {
+        if (url.includes('/api/cart/items') && (!init?.method || init.method === 'GET')) {
           const req = new NextRequest(`http://localhost:3000${url}`, {
             method: 'GET',
             headers: simulatedClientCookie ? { Cookie: simulatedClientCookie } : {},
@@ -1027,10 +1060,17 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
           return res;
         }
 
-        if (url === '/api/cart/items' && init?.method === 'POST') {
+        if (url.startsWith('/api/cart/items') && init?.method === 'POST') {
           postAttemptCount++;
           const body = JSON.parse(init.body);
-          capturedFirstOpKey = body.operationKey;
+          if (postAttemptCount === 1) capturedFirstOpKey = body.operationKey;
+          if (postAttemptCount === 2) expect(body.operationKey).toBe(capturedFirstOpKey);
+          if (postAttemptCount <= 2) {
+            expect(body).toMatchObject({ productId: physicalProductA.id, variantId: variantA1.id, quantity: 10 });
+          } else {
+            expect(body).toMatchObject({ productId: physicalProductB.id, quantity: 10 });
+            expect(body.variantId).toBeUndefined();
+          }
 
           // Request includes the established session cookie
           const headers: Record<string, string> = {
@@ -1040,7 +1080,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
             headers.Cookie = simulatedClientCookie;
           }
 
-          const req = new NextRequest('http://localhost:3000/api/cart/items', {
+          const req = new NextRequest(`http://localhost:3000${url}`, {
             method: 'POST',
             headers,
             body: init.body,
@@ -1062,28 +1102,18 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
             throw netErr;
           }
 
-          // Second attempt (retry): Network succeeds! Client receives idempotent summary
+          deliveredPostCount++;
           return res;
         }
 
         return new Response('Not found', { status: 404 });
       });
 
-      function FirstAddTestHarness() {
-        const { items, totalCount, addItem, isCartOpen, cartId } = useCart();
+      function CartState() {
+        const { items, totalCount, isCartOpen, cartId } = useCart();
         return React.createElement(
           'div',
           null,
-          React.createElement(
-            'button',
-            {
-              id: 'btn-first-add',
-              onClick: async () => {
-                await addItem({ productId: physicalProductA.id, quantity: 10 });
-              },
-            },
-            'First Add'
-          ),
           React.createElement('div', { id: 'dom-items-count' }, String(items.length)),
           React.createElement('div', { id: 'dom-total-qty' }, String(totalCount)),
           React.createElement('div', { id: 'dom-cart-id' }, String(cartId || '')),
@@ -1091,18 +1121,33 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         );
       }
 
-      try {
-        await act(async () => {
-          root.render(React.createElement(CartProvider, null, React.createElement(FirstAddTestHarness)));
-          await new Promise((resolve) => setTimeout(resolve, 30));
-        });
+      function renderProduct(product: NonNullable<typeof publishedProduct>) {
+        root.render(React.createElement(CartProvider, {
+          locale: 'en',
+          children: React.createElement(React.Fragment, null,
+            React.createElement(ProductDetailView, { key: product.id, product, locale: 'en' }),
+            React.createElement(CartState),
+          ),
+        }));
+      }
 
-        // Trigger first add: ensureSession runs, then POST attempt 1 fails, and executeWithOperationRetry retries inside same session
-        const btnFirstAdd = container.querySelector('#btn-first-add') as any;
+      try {
+        await act(async () => renderProduct(publishedProduct));
+
+        const variant = container.querySelector<HTMLSelectElement>('select[name="variantId"]')!;
+        const add = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+        expect(add.disabled).toBe(true);
         await act(async () => {
-          btnFirstAdd.click();
-          await new Promise((resolve) => setTimeout(resolve, 150));
+          variant.value = String(variantA1.id);
+          variant.dispatchEvent(new window.Event('change', { bubbles: true }));
         });
+        expect(add.disabled).toBe(false);
+        await act(async () => {
+          add.click();
+          expect(container.querySelector('[role="status"]')?.textContent).not.toBe('Added to your cart.');
+          await vi.waitFor(() => expect(deliveredPostCount).toBe(1));
+        });
+        expect(container.querySelector('[role="status"]')?.textContent).toBe('Added to your cart.');
 
         // Assert that exactly 2 POST attempts were made (1 failure + 1 retry)
         expect(postAttemptCount).toBe(2);
@@ -1119,6 +1164,19 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         expect(domDrawerOpen.textContent).toBe('true');
         expect(domCartId.textContent).toBe(String(serverCreatedCartId));
 
+        const reloaded = await cartItemsGetRoute(new NextRequest('http://localhost:3000/api/cart/items?locale=ar', {
+          headers: { Cookie: simulatedClientCookie },
+        }));
+        expect(reloaded.status).toBe(200);
+        expect(await reloaded.json()).toMatchObject({
+          cartId: serverCreatedCartId,
+          summary: {
+            grandTotal: 2500,
+            totalItemsCount: 10,
+            items: [{ productId: physicalProductA.id, variantId: variantA1.id, unitPrice: 250, quantity: 10 }],
+          },
+        });
+
         // CRITICAL DATABASE INTEGRITY INVARIANTS:
         // 1. Total carts in PostgreSQL must have increased by EXACTLY 1 (initial + 1, NOT initial + 2!)
         const postCheck = await db.execute(sql`SELECT count(*)::int as count FROM "carts";`);
@@ -1133,7 +1191,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         });
         expect(dbCart).toBeDefined();
         expect(dbCart.items?.length).toBe(1);
-        expect(dbCart.items?.[0].quantity).toBe(10);
+        expect(dbCart.items?.[0]).toMatchObject({ product: physicalProductA.id, variant: variantA1.id, quantity: 10 });
         expect(dbCart.appliedOperations).toContain(capturedFirstOpKey);
 
         // 3. Exactly ONE cart in the entire database matches this operationKey
@@ -1143,6 +1201,30 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         `);
         expect(opCheck.rows.length).toBe(1);
         expect(opCheck.rows[0].id).toBe(serverCreatedCartId);
+
+        await act(async () => renderProduct(simpleProduct));
+        const addSimple = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+        expect(addSimple.disabled).toBe(false);
+        await act(async () => {
+          addSimple.click();
+          await vi.waitFor(() => expect(deliveredPostCount).toBe(2));
+        });
+        expect(container.querySelector('[role="status"]')?.textContent).toBe('Added to your cart.');
+
+        const afterSimpleAdd = await cartItemsGetRoute(new NextRequest('http://localhost:3000/api/cart/items', {
+          headers: { Cookie: simulatedClientCookie },
+        }));
+        expect(await afterSimpleAdd.json()).toMatchObject({
+          cartId: serverCreatedCartId,
+          summary: {
+            grandTotal: 4300,
+            totalItemsCount: 20,
+            items: [
+              { productId: physicalProductA.id, variantId: variantA1.id, quantity: 10 },
+              { productId: physicalProductB.id, unitPrice: 180, quantity: 10 },
+            ],
+          },
+        });
       } finally {
         await act(async () => {
           root.unmount();
@@ -1151,6 +1233,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         global.window = originalWindow;
         global.document = originalDocument;
         global.fetch = originalFetch;
+        vi.unstubAllGlobals();
       }
     });
 
@@ -1181,8 +1264,8 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
             { status: 503, headers: { 'Content-Type': 'application/json' } }
           );
         }
-        if (url.includes('/api/cart/items') && (!init || init.method === 'GET')) {
-          return new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        if (url.includes('/api/cart/items') && (!init?.method || init.method === 'GET')) {
+          return new Response(JSON.stringify({ summary: { items: [] } }), { status: 200, headers: { 'Content-Type': 'application/json' } });
         }
         if (url.includes('/api/cart/items') && init?.method === 'POST') {
           postAttemptCount++;
@@ -1202,7 +1285,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
               id: 'btn-fail-add',
               onClick: async () => {
                 try {
-                  await addItem({ productId: physicalProductA.id, quantity: 10 });
+                  await addItem({ productId: physicalProductA.id, variantId: variantA1.id, quantity: 10 });
                 } catch {
                   // Handled by UI error state
                 }
@@ -1234,7 +1317,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
 
         // 3. UI displays clear error
         const domError = container.querySelector('#dom-error')!;
-        expect(domError.textContent).toContain('Failed to initialize cart session');
+        expect(domError.textContent).toBe('Failed to provision session.');
       } finally {
         await act(async () => {
           root.unmount();
@@ -1284,6 +1367,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
           },
           body: JSON.stringify({
             productId: physicalProductA.id,
+            variantId: variantA1.id,
             quantity: 10,
             artworkAssetId: artwork.id,
             printingNotes: 'طباعة شعار الشركة بدقة ليزر',
@@ -1402,6 +1486,155 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
     });
   });
 
+  it('merges the signed guest cart on the first cart read after Payload login and keeps authenticated edits persistent', async () => {
+    const email = `cart-merge-${crypto.randomUUID()}@example.com`;
+    const password = crypto.randomUUID();
+    const customer = await payload.create({ collection: 'users', data: { email, password, roles: ['customer'] } });
+    createdUserIds.push(customer.id);
+
+    const accountCart = await getOrCreateCart(payload, null, customer.id);
+    createdCartIds.push(accountCart.id);
+    await addItemToCart(payload, accountCart.id, {
+      productId: physicalProductA.id, variantId: variantA1.id, quantity: 4, operationKey: generateOperationKey('add'),
+    });
+    const previousOrderCart = await getOrCreateCart(payload, null, customer.id);
+    createdCartIds.push(previousOrderCart.id);
+    await payload.update({ collection: 'carts', id: previousOrderCart.id, data: { purchasedAt: new Date().toISOString() } });
+
+    const url = 'http://localhost:3000/api/cart/items?locale=en';
+    function cartRequest(cookie: string, method = 'GET', body?: Record<string, unknown>) {
+      return new NextRequest(url, {
+        method,
+        headers: { cookie, 'content-type': 'application/json' },
+        body: body && JSON.stringify(body),
+      });
+    }
+    const init = await cartItemsGetRoute(new NextRequest(`${url}&init=true`));
+    expect(init.status).toBe(200);
+    const guest = await init.json();
+    createdCartIds.push(guest.cartId);
+    const guestCookie = init.headers.get('set-cookie')!.split(';')[0];
+    const artwork = await payload.create({
+      collection: 'artwork-assets',
+      data: {
+        storageKey: `artwork/${crypto.randomUUID()}/logo.png`,
+        originalFilename: 'logo.png',
+        verificationStatus: 'valid',
+        ownerSession: String(guest.cartId),
+        cart: guest.cartId,
+      },
+      context: { isTrustedUpload: true },
+    });
+    createdArtworkIds.push(artwork.id);
+    const guestAdd = {
+      productId: physicalProductA.id, variantId: variantA1.id, quantity: 6, operationKey: generateOperationKey('add'),
+    };
+    const guestCustomizedAdd = {
+      ...guestAdd, quantity: 2, printingNotes: 'Print on reverse', artworkAssetId: String(artwork.id),
+      operationKey: generateOperationKey('add'),
+    };
+    expect((await cartItemsPostRoute(cartRequest(guestCookie, 'POST', guestAdd))).status).toBe(200);
+    const customized = await cartItemsPostRoute(cartRequest(guestCookie, 'POST', guestCustomizedAdd));
+    expect(customized.status).toBe(200);
+    const guestArtworkLine = (await customized.json()).summary.items[1].id;
+    await payload.update({
+      collection: 'artwork-assets', id: artwork.id,
+      data: { lineItemId: guestArtworkLine }, context: { isTrustedUpload: true },
+    });
+
+    const login = await handleEndpoints({
+      config: configPromise,
+      path: '/api/users/login',
+      request: new Request('http://localhost:3000/api/users/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      }),
+    });
+    expect(login.status).toBe(200);
+    const authCookie = login.headers.get('set-cookie')!.split(';')[0];
+    expect(authCookie).toMatch(/^payload-token=/);
+    const combinedCookie = `${authCookie}; ${guestCookie}`;
+
+    const [merged, concurrent] = await Promise.all([
+      cartItemsGetRoute(cartRequest(combinedCookie)),
+      cartItemsGetRoute(cartRequest(combinedCookie)),
+    ]);
+    expect([merged.status, concurrent.status]).toEqual([200, 200]);
+    expect([merged.headers.get('set-cookie'), concurrent.headers.get('set-cookie')].join(' ')).toMatch(/mwheba_cart=;/);
+    expect(await concurrent.json()).toMatchObject({ cartId: accountCart.id, summary: { totalItemsCount: 12 } });
+    const mergedBody = await merged.json();
+    expect(mergedBody).toMatchObject({
+      cartId: accountCart.id,
+      summary: {
+        totalItemsCount: 12,
+        subtotal: 3000,
+        totalCustomizationFees: 70,
+        grandTotal: 3070,
+        items: [
+          { id: expect.any(String), quantity: 10, productId: physicalProductA.id, variantId: variantA1.id },
+          {
+            id: expect.any(String), quantity: 2, productId: physicalProductA.id, variantId: variantA1.id,
+            printingNotes: 'Print on reverse', artworkAssetId: String(artwork.id),
+          },
+        ],
+      },
+    });
+    const mergedRows = await payload.findByID({ collection: 'carts', id: accountCart.id, depth: 0 });
+    expect(mergedRows.customer).toBe(customer.id);
+    expect(mergedRows.items?.map(({ quantity }) => quantity)).toEqual([10, 2]);
+    const retiredGuest = await payload.findByID({ collection: 'carts', id: guest.cartId, depth: 0 });
+    expect(retiredGuest.secret).toBeFalsy();
+    expect(retiredGuest.customer).toBeFalsy();
+    const transferredArtwork = await payload.findByID({ collection: 'artwork-assets', id: artwork.id, depth: 0 });
+    expect(transferredArtwork).toMatchObject({
+      cart: accountCart.id, uploader: customer.id, lineItemId: mergedBody.summary.items[1].id,
+    });
+
+    function signArtwork(cookie: string) {
+      const request = new NextRequest(`http://localhost:3000/api/customization/artwork/${artwork.id}/sign`, {
+        method: 'POST', headers: { cookie },
+      });
+      return signArtworkRoute(request, { params: Promise.resolve({ id: String(artwork.id) }) });
+    }
+    expect((await signArtwork(authCookie)).status).toBe(200);
+    expect((await signArtwork(guestCookie)).status).toBe(403);
+    for (const cookie of [combinedCookie, authCookie]) {
+      const reload = await cartItemsGetRoute(cartRequest(cookie));
+      expect(reload.status).toBe(200);
+      expect(await reload.json()).toMatchObject({ cartId: accountCart.id, summary: { totalItemsCount: 12 } });
+    }
+    const retriedAdd = await cartItemsPostRoute(cartRequest(combinedCookie, 'POST', guestAdd));
+    expect(retriedAdd.status).toBe(200);
+    expect(await retriedAdd.json()).toMatchObject({ cartId: accountCart.id, summary: { totalItemsCount: 12 } });
+
+    const abandonedGuest = await cartItemsGetRoute(cartRequest(guestCookie));
+    expect(abandonedGuest.status).toBe(200);
+    expect(await abandonedGuest.json()).toMatchObject({ items: [], totalItemsCount: 0 });
+    expect((await cartItemsPostRoute(cartRequest(guestCookie, 'POST', guestAdd))).status).toBe(401);
+
+    const failedSelection = await cartItemsPostRoute(cartRequest(authCookie, 'POST', {
+      productId: physicalProductB.id, variantId: variantA1.id, quantity: 10, operationKey: generateOperationKey('add'),
+    }));
+    expect(failedSelection.status).toBe(422);
+    expect(await failedSelection.json()).toMatchObject({ error: expect.stringContaining('VARIANT_MISMATCH') });
+    const patch = await cartItemsPatchRoute(cartRequest(authCookie, 'PATCH', {
+      itemId: mergedBody.summary.items[0].id, quantity: 11, operationKey: generateOperationKey('update'),
+    }));
+    expect(patch.status).toBe(200);
+    expect(await patch.json()).toMatchObject({ cartId: accountCart.id, summary: { totalItemsCount: 13 } });
+    const remove = await cartItemsDeleteRoute(cartRequest(authCookie, 'DELETE', {
+      itemId: mergedBody.summary.items[1].id, operationKey: generateOperationKey('remove'),
+    }));
+    expect(remove.status).toBe(200);
+    expect(await remove.json()).toMatchObject({ cartId: accountCart.id, summary: { totalItemsCount: 11, grandTotal: 2750 } });
+    const persisted = await cartItemsGetRoute(cartRequest(authCookie));
+    expect(await persisted.json()).toMatchObject({
+      cartId: accountCart.id,
+      summary: { items: [{ productId: physicalProductA.id, variantId: variantA1.id, quantity: 11 }] },
+    });
+  });
+
   describe('11. Security & Authorization: OperationKey is Strictly NOT an Access Token', () => {
     it('proves that knowing an operationKey strictly FAILS to grant access to another users cart', async () => {
       // 1. Create a legitimate victim cart
@@ -1411,6 +1644,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
       const victimOpKey = `op_sensitive_transaction_${Date.now()}`;
       await addItemToCart(payload, victimCart.id, {
         productId: physicalProductA.id,
+        variantId: variantA1.id,
         quantity: 25,
         operationKey: victimOpKey,
       });
@@ -1448,6 +1682,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productId: physicalProductA.id,
+          variantId: variantA1.id,
           quantity: 50,
           operationKey: victimOpKey,
         }),
@@ -1480,6 +1715,7 @@ describe('B2B-02: Cart Resilience, Product ID MOQ & Separate Printing Fees', () 
 
       await addItemToCart(payload, cart.id, {
         productId: physicalProductA.id,
+        variantId: variantA1.id,
         quantity: 10,
         operationKey: generateOperationKey('add'),
       });

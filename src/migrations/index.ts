@@ -18,6 +18,11 @@ import * as migration_20261104_080000_add_artwork_assets_b2b from './20261104_08
 import * as migration_20261104_083000_update_artwork_scan_status_default from './20261104_083000_update_artwork_scan_status_default';
 import * as migration_20261104_090000_add_order_snapshots_b2b from './20261104_090000_add_order_snapshots_b2b';
 import * as migration_20261104_100000_add_order_cart_link_and_idempotency from './20261104_100000_add_order_cart_link_and_idempotency';
+import * as migration_20261125_080000_catalog_taxonomy from './20261125_080000_catalog_taxonomy';
+import * as migration_20261125_090000_catalog_products from './20261125_090000_catalog_products';
+import * as migration_20261125_100000_customer_default_address from './20261125_100000_customer_default_address';
+import * as migration_20261125_110000_pilot_fulfillment from './20261125_110000_pilot_fulfillment';
+import * as migration_20261126_090000_store_inventory from './20261126_090000_store_inventory';
 
 export const migrations = [
   {
@@ -119,5 +124,30 @@ export const migrations = [
     up: migration_20261104_210000_mig01_content_provenance_and_approval.up,
     down: migration_20261104_210000_mig01_content_provenance_and_approval.down,
     name: '20261104_210000_mig01_content_provenance_and_approval',
+  },
+  {
+    up: migration_20261125_080000_catalog_taxonomy.up,
+    down: migration_20261125_080000_catalog_taxonomy.down,
+    name: '20261125_080000_catalog_taxonomy',
+  },
+  {
+    up: migration_20261125_090000_catalog_products.up,
+    down: migration_20261125_090000_catalog_products.down,
+    name: '20261125_090000_catalog_products',
+  },
+  {
+    up: migration_20261125_100000_customer_default_address.up,
+    down: migration_20261125_100000_customer_default_address.down,
+    name: '20261125_100000_customer_default_address',
+  },
+  {
+    up: migration_20261125_110000_pilot_fulfillment.up,
+    down: migration_20261125_110000_pilot_fulfillment.down,
+    name: '20261125_110000_pilot_fulfillment',
+  },
+  {
+    up: migration_20261126_090000_store_inventory.up,
+    down: migration_20261126_090000_store_inventory.down,
+    name: '20261126_090000_store_inventory',
   },
 ];
