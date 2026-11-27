@@ -1,17 +1,21 @@
 import type { CollectionConfig } from 'payload';
-import { hasRole } from '../../identity/access/roles';
+import { isCatalogManager } from '../../identity/access/roles';
+import { preventReferencedTermDeletion, readTaxonomy, taxonomyActiveField, taxonomySlugField } from './taxonomy';
 
 export const Categories: CollectionConfig = {
   slug: 'categories',
   admin: {
     useAsTitle: 'title',
-    defaultColumns: ['title', 'slug', 'updatedAt'],
+    defaultColumns: ['title', 'slug', 'isActive', 'updatedAt'],
   },
   access: {
-    read: () => true,
-    create: ({ req }) => hasRole(req.user, ['super_admin', 'catalog_manager']),
-    update: ({ req }) => hasRole(req.user, ['super_admin', 'catalog_manager']),
-    delete: ({ req }) => hasRole(req.user, ['super_admin', 'catalog_manager']),
+    read: readTaxonomy,
+    create: isCatalogManager,
+    update: isCatalogManager,
+    delete: isCatalogManager,
+  },
+  hooks: {
+    beforeDelete: [preventReferencedTermDeletion('category')],
   },
   fields: [
     {
@@ -19,16 +23,11 @@ export const Categories: CollectionConfig = {
       type: 'text',
       required: true,
     },
-    {
-      name: 'slug',
-      type: 'text',
-      required: true,
-      unique: true,
-      index: true,
-    },
+    taxonomySlugField,
     {
       name: 'description',
       type: 'textarea',
     },
+    taxonomyActiveField,
   ],
 };

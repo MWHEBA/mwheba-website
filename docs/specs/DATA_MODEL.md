@@ -12,8 +12,9 @@
 
 ## 2. Commerce domain
 Prefer plugin-native entities where suitable:
-- `Products`: title, type (`physical` or `fixed_service`), publication status.
-- `ProductVariants`: SKU, attributes, sellable price (inventory and stock tracking strictly excluded per D-018).
+- `Products`: title, type (`physical` or `fixed_service`), publication status, and canonical stock balance for a simple physical sellable SKU.
+- `ProductVariants`: SKU, attributes, sellable price, and canonical stock balance for a variant physical sellable SKU. Keep Payload Ecommerce native inventory disabled per D-018.
+- `InventoryMovements`: append-only opening, allocation, cancellation release, inspected-return release, and authorized adjustment records linked to the stable sellable record/SKU, order when applicable, actor or trusted process, operation identity, quantity, reason, and timestamp. Fixed-price services have no stock movements.
 - `Categories`: hierarchy and merchandising metadata.
 - `Carts`: buyer/guest identity, currency, totals, line items.
 - `CartItems`: product/variant reference, quantity, price snapshot, customization reference.
@@ -54,13 +55,15 @@ Prefer plugin-native entities where suitable:
 - Refunds never silently erase original payment history.
 - Tax/invoice records are auditable and never inferred solely from a checkout success screen.
 - No unauthorized public access to uploaded customer artwork.
-- Order state transitions must be transactionally consistent; inventory/stock tracking is strictly excluded per D-018.
+- Order creation, SKU balance decrement, movement creation, fulfillment-job creation, and cart closure are transactionally consistent. A retry resolves the same authorized order without a second allocation.
+- A shortage for any SKU leaves the order, cart state, balances, and movements unchanged. Uninitialized stock is unavailable for purchase.
+- Eligible pre-dispatch cancellation restores known allocation once when the order is unpaid and customized production or service work has not started. Post-dispatch refusal does not restore stock. Operations or super-admin may restore only received, inspected sellable quantities. The received quantity per SKU cannot exceed its shipped quantity minus prior receipts. Restoration cannot exceed the outstanding allocation and applies once. Unsellable units remain unavailable. Finance and customer roles cannot approve or initiate physical restoration.
 
 ## 6. Modeling questions for discovery
 - Which entities are native to the exact installed plugin version?
 - Does the plugin support mixed cart item types and per-item metadata?
 - How are guest carts linked to customers after checkout?
-- How does the candidate schema accommodate omitting stock tracking per D-018?
+- Which additive migration and backfill process can safely introduce the D-018 balances and movements without inventing opening stock or crediting legacy orders automatically?
 - Which payment and tax fields exist natively?
 - Is invoice numbering owned by a certified external system?
 - What retention and deletion rules apply to artwork and invoices?

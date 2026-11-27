@@ -1,4 +1,4 @@
-import type { Payload } from 'payload';
+import type { Payload, PayloadRequest } from 'payload';
 import type { CommerceSettingsData } from '../globals/CommerceSettings';
 
 /**
@@ -40,12 +40,13 @@ export const PROVISIONAL_DELIVERY_TARIFFS = {
  */
 export async function getCommerceSettings(
   payload: Payload,
-  options?: { allowFallbackIfUninitialized?: boolean }
+  options?: { allowFallbackIfUninitialized?: boolean; req?: Partial<PayloadRequest> }
 ): Promise<CommerceSettingsData> {
   try {
     const settings = await payload.findGlobal({
       slug: 'commerce-settings',
       depth: 0,
+      req: options?.req,
     });
     if (settings && typeof settings === 'object') {
       return settings as unknown as CommerceSettingsData;

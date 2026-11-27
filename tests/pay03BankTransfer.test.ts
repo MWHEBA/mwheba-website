@@ -1,9 +1,11 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -81,11 +83,13 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
       },
       delivery: {
         method: 'shipping',
+        ...confirmedTestDelivery(quote),
         shippingAddress: { governorate: 'Cairo', city: 'Cairo', streetAddress: '20 Tahrir Sq' },
         expectedShippingFee: quote.shippingFee,
       },
       paymentMethod: 'bank_transfer',
       expectedGrandTotal: quote.grandTotal,
+      expectedQuoteConfirmation: quote.confirmation,
       idempotencyKey: `idemp_bt_${unique()}`,
     });
 
@@ -98,8 +102,10 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
     return order;
   };
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, { bankTransfer: true });
     const password = 'Password2026!';
 
     // 1. Create Customer 1
@@ -151,6 +157,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
     physicalProduct = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY03-PEN',
         title: 'PAY-03 Corporate Pen Set',
         slug: `pay03-pen-${unique()}`,
         itemType: 'physical',
@@ -160,6 +167,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProduct.id);
     cleanup.products.push(physicalProduct.id);
 
     // 7. Create Uploaded Receipt Asset for Customer 1
@@ -188,6 +196,7 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     const del = async (collection: string, id: any, context?: any) => {
       try {
         await payload.delete({ collection, id, context });
@@ -251,11 +260,13 @@ describe('PAY-03: Bank Transfer Submission & Finance Verification Gate', () => {
         },
         delivery: {
           method: 'shipping',
+          ...confirmedTestDelivery(quote),
           shippingAddress: { governorate: 'Cairo', city: 'Cairo', streetAddress: '20 Tahrir Sq' },
           expectedShippingFee: quote.shippingFee,
         },
         paymentMethod: 'cod',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
         idempotencyKey: `cod_order_${unique()}`,
       });
       cleanup.orders.push(codRes.order.id);

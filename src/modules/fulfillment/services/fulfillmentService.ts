@@ -3,6 +3,8 @@ import { sql } from '@payloadcms/db-postgres';
 import { hasRole } from '@/modules/identity/access/roles';
 import { createArtworkDownloadToken } from '@/modules/customization/lib/privateStorage';
 import { lineHasCustomization } from '@/modules/cart-checkout/logic/customizationFee';
+import { isClosedOrder } from '@/modules/orders/services/orderLifecycle';
+import { lockOrderRow } from '@/modules/orders/services/orderTransaction';
 import {
   initialStatus,
   type FulfillmentStatus,
@@ -73,16 +75,6 @@ async function lockJobRow(payload: Payload, transactionID: unknown, jobId: numbe
   const executor = session?.db;
   if (!executor || typeof executor.execute !== 'function') return;
   await executor.execute(sql`SELECT "id" FROM "fulfillment_jobs" WHERE "id" = ${numericId} FOR UPDATE`);
-}
-
-/** Row lock on the order inside the active transaction (serializes concurrent customer proof approvals). */
-async function lockOrderRow(payload: Payload, transactionID: unknown, orderId: number | string) {
-  const numericId = Number(orderId);
-  if (!Number.isFinite(numericId)) return;
-  const session = (payload.db as any)?.sessions?.[String(transactionID)];
-  const executor = session?.db;
-  if (!executor || typeof executor.execute !== 'function') return;
-  await executor.execute(sql`SELECT "id" FROM "orders" WHERE "id" = ${numericId} FOR UPDATE`);
 }
 
 function isUniqueViolation(err: any): boolean {
@@ -165,8 +157,17 @@ export async function transitionJob(
   const tx = await beginTx(payload);
   const txReq: any = { payload, transactionID: tx.transactionID };
   try {
-    // Serialize concurrent transitions for this job by locking its row in PostgreSQL
+    // Acquire the parent first so dispatch and cancellation cannot both succeed.
+    const candidate = await payload.findByID({
+      collection: 'fulfillment-jobs', id: params.jobId, depth: 0, req: txReq, disableErrors: true,
+    });
+    if (!candidate) fail('JOB_NOT_FOUND', 'Fulfillment job not found.', 404);
+    requireStaffForTrack(params.user, candidate.track);
+    const orderId = Number(idOf(candidate.order));
+    await lockOrderRow(payload, txReq, orderId);
     await lockJobRow(payload, tx.transactionID, params.jobId);
+    const order = await payload.findByID({ collection: 'orders', id: orderId, depth: 0, req: txReq });
+    if (isClosedOrder(order)) fail('ORDER_FULFILLMENT_CLOSED', 'Fulfillment for this order is closed.', 409);
 
     // Re-read job state inside the locked transaction
     const job: any = await payload
@@ -237,7 +238,7 @@ export async function approveProof(payload: Payload, params: { orderId: number |
   const txReq: any = { payload, transactionID: tx.transactionID };
   try {
     // Serialize concurrent proof approvals for this order by locking its row in PostgreSQL
-    await lockOrderRow(payload, tx.transactionID, params.orderId);
+    await lockOrderRow(payload, txReq, Number(params.orderId));
 
     // Re-read order state inside the locked transaction
     const order: any = await payload
@@ -247,6 +248,7 @@ export async function approveProof(payload: Payload, params: { orderId: number |
       // Do not reveal whether the order exists
       fail('ORDER_NOT_FOUND', 'Order not found.', 404);
     }
+    if (isClosedOrder(order)) fail('ORDER_FULFILLMENT_CLOSED', 'Fulfillment for this order is closed.', 409);
     if (order.proofStatus !== 'proof_pending') {
       fail('PROOF_NOT_PENDING', `Order proof status is '${order.proofStatus}', nothing to approve.`, 409);
     }
@@ -403,6 +405,9 @@ export async function submitServiceBrief(
   const tx = await beginTx(payload);
   const txReq: any = { payload, transactionID: tx.transactionID };
   try {
+    await lockOrderRow(payload, txReq, Number(order.id));
+    const lockedOrder = await payload.findByID({ collection: 'orders', id: order.id, depth: 0, req: txReq });
+    if (isClosedOrder(lockedOrder)) fail('ORDER_FULFILLMENT_CLOSED', 'Fulfillment for this order is closed.', 409);
     // Serialize concurrent submissions for this job: lock the job row, then re-check the status
     // INSIDE the transaction. The UNIQUE index on service_briefs.job_id is the final database backstop.
     await lockJobRow(payload, tx.transactionID, job.id);

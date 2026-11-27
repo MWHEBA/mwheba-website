@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { LocaleSwitchLink } from './LocaleSwitchLink';
 
 interface NavItem {
   href: string;
@@ -141,7 +142,7 @@ export function MobileDrawer({
                 <span>{locale === 'ar' ? 'واتساب موهبة' : 'WhatsApp Us'}</span>
               </a>
 
-              <Link
+              <LocaleSwitchLink
                 href={otherLocaleHref}
                 className="lang-switch-btn"
                 style={{ width: '100%' }}
@@ -163,7 +164,7 @@ export function MobileDrawer({
                   <path d="M2 12h20" />
                 </svg>
                 <span>{otherLocaleLabel}</span>
-              </Link>
+              </LocaleSwitchLink>
             </div>
           </div>
         </>

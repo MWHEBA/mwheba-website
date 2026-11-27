@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { getPayloadClient } from '../src/lib/payload';
 
 vi.mock('next/font/google', () => ({
   Cairo: () => ({ variable: 'mock-font-cairo' }),
@@ -179,35 +181,46 @@ describe('MIG-04: Technical SEO, Verified Schema.org & Rendered Page Structured 
     });
 
     it('ProductDetailPage renders valid Product and Breadcrumb JSON-LD from authentic product data', async () => {
-      const pageJsx = await ProductDetailPage({
-        params: Promise.resolve({ locale: 'ar', slug: 'executive-thermal-flask' }),
+      const payload = await getPayloadClient();
+      const slug = 'executive-thermal-flask-' + randomUUID();
+      const name = 'كوب حراري ذكي مخصص';
+      const sku = 'SEO-' + randomUUID();
+      const product = await payload.create({
+        collection: 'products',
+        locale: 'ar',
+        data: { title: 'Executive thermal flask', storefrontTitle: name, slug, sku,
+          productType: 'physical', basePrice: 250, _status: 'published' },
       });
 
-      expect(React.isValidElement(pageJsx)).toBe(true);
+      try {
+        const pageJsx = await ProductDetailPage({ params: Promise.resolve({ locale: 'ar', slug }) });
+        expect(React.isValidElement(pageJsx)).toBe(true);
+        const children = React.Children.toArray(pageJsx.props.children);
+        const productScript = children.find(
+          (child) => React.isValidElement<{ id?: string }>(child) && child.props.id === 'product-jsonld',
+        );
+        const breadcrumbsScript = children.find(
+          (child) => React.isValidElement<{ id?: string }>(child) && child.props.id === 'product-breadcrumbs-jsonld',
+        );
+        type ScriptProps = { dangerouslySetInnerHTML: { __html: string } };
+        if (!React.isValidElement<ScriptProps>(productScript) || !React.isValidElement<ScriptProps>(breadcrumbsScript)) {
+          throw new Error('The product and breadcrumb scripts must be present');
+        }
 
-      const children = React.Children.toArray((pageJsx as any).props.children);
-      const productScript = children.find(
-        (child: any) => child.props?.id === 'product-jsonld',
-      ) as any;
-      const breadcrumbsScript = children.find(
-        (child: any) => child.props?.id === 'product-breadcrumbs-jsonld',
-      ) as any;
+        const productJson = JSON.parse(productScript.props.dangerouslySetInnerHTML.__html);
+        expect(productJson).toMatchObject({
+          '@type': 'Product', name, sku, offers: { price: '250.00', priceCurrency: 'EGP' },
+        });
+        expect(productJson.offers.availability).toBeUndefined();
 
-      expect(productScript).toBeDefined();
-      expect(breadcrumbsScript).toBeDefined();
-
-      const productJson = JSON.parse(productScript.props.dangerouslySetInnerHTML.__html);
-      expect(productJson['@type']).toBe('Product');
-      expect(productJson.name).toBe('كوب حراري ذكي مخصص (Executive Thermal Flask)');
-      expect(productJson.offers.price).toBe('250.00');
-      expect(productJson.offers.priceCurrency).toBe('EGP');
-      expect(productJson.offers.availability).toBe('https://schema.org/InStock');
-
-      const breadcrumbsJson = JSON.parse(breadcrumbsScript.props.dangerouslySetInnerHTML.__html);
-      expect(breadcrumbsJson['@type']).toBe('BreadcrumbList');
-      expect(breadcrumbsJson.itemListElement.length).toBe(3);
-      expect(breadcrumbsJson.itemListElement[0].name).toBe('الرئيسية');
-      expect(breadcrumbsJson.itemListElement[2].name).toBe('كوب حراري ذكي مخصص (Executive Thermal Flask)');
+        const breadcrumbsJson = JSON.parse(breadcrumbsScript.props.dangerouslySetInnerHTML.__html);
+        expect(breadcrumbsJson['@type']).toBe('BreadcrumbList');
+        expect(breadcrumbsJson.itemListElement).toHaveLength(3);
+        expect(breadcrumbsJson.itemListElement[0].name).toBe('الرئيسية');
+        expect(breadcrumbsJson.itemListElement[2]).toMatchObject({ name, item: SITE_URL + '/ar/store/' + slug });
+      } finally {
+        await payload.delete({ collection: 'products', id: product.id });
+      }
     });
   });
 

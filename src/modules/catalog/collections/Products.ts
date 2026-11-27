@@ -1,4 +1,6 @@
-import type { CollectionConfig } from 'payload';
+import type { CollectionConfig, Field } from 'payload';
+import { isCatalogManager } from '../../identity/access/roles';
+import { catalogSkuField, protectCatalogHistory, useMajorEgpField } from './catalogFields';
 
 /**
  * B2B-01: Product Catalog, Variant Matrix & Service Modeling.
@@ -12,12 +14,18 @@ export const productsCollectionOverride = ({
 }): CollectionConfig => {
   return {
     ...defaultCollection,
+    access: {
+      ...defaultCollection.access,
+      create: isCatalogManager,
+      update: isCatalogManager,
+    },
     admin: {
       ...defaultCollection.admin,
       useAsTitle: 'title',
       defaultColumns: [
         'title',
         'slug',
+        'sku',
         'productType',
         'minOrderQuantity',
         'customizationFee',
@@ -27,13 +35,21 @@ export const productsCollectionOverride = ({
     },
     hooks: {
       ...defaultCollection.hooks,
+      beforeOperation: [
+        ...(defaultCollection.hooks?.beforeOperation || []),
+        protectCatalogHistory,
+      ],
       beforeValidate: [
         ...(defaultCollection.hooks?.beforeValidate || []),
-        ({ data }) => {
+        ({ data, originalDoc }) => {
           if (!data) return data;
 
-          // Normalize and synchronize productType and itemType
-          if (data.productType === 'fixed_service' || data.itemType === 'service') {
+          const originalIsService = originalDoc?.productType === 'fixed_service' || originalDoc?.itemType === 'service';
+          const isService = data.productType === undefined && data.itemType === undefined
+            ? originalIsService
+            : data.productType === 'fixed_service' || data.itemType === 'service';
+
+          if (isService) {
             data.productType = 'fixed_service';
             data.itemType = 'service';
             data.minOrderQuantity = 1;
@@ -41,19 +57,18 @@ export const productsCollectionOverride = ({
           } else {
             data.productType = 'physical';
             data.itemType = 'physical';
-            if (data.minOrderQuantity === undefined || data.minOrderQuantity === null) {
+            const quantity = data.minOrderQuantity === undefined && !originalIsService
+              ? originalDoc?.minOrderQuantity
+              : data.minOrderQuantity;
+            if (quantity == null) {
               data.minOrderQuantity = 10;
-            } else if (
-              typeof data.minOrderQuantity !== 'number' ||
-              !Number.isInteger(data.minOrderQuantity) ||
-              data.minOrderQuantity < 10
-            ) {
+            } else if (typeof quantity !== 'number' || !Number.isInteger(quantity) || quantity < 10) {
               throw new Error(
                 'Minimum order quantity for physical merchandise must be an integer of at least 10.'
               );
             }
             if (data.allowArtworkUpload === undefined) {
-              data.allowArtworkUpload = true;
+              data.allowArtworkUpload = originalIsService ? true : originalDoc?.allowArtworkUpload ?? true;
             }
           }
 
@@ -62,7 +77,7 @@ export const productsCollectionOverride = ({
       ],
     },
     fields: (() => {
-      const explicitFields: any[] = [
+      const explicitFields: Field[] = [
         {
           name: 'title',
           type: 'text',
@@ -74,6 +89,27 @@ export const productsCollectionOverride = ({
           required: true,
           unique: true,
           index: true,
+        },
+        catalogSkuField,
+        {
+          name: 'storefrontTitle',
+          type: 'text',
+          localized: true,
+          admin: { description: 'Storefront name for the selected locale. Falls back to the product title.' },
+        },
+        {
+          name: 'storefrontDescription',
+          type: 'textarea',
+          localized: true,
+          admin: { description: 'Storefront description for the selected locale. Falls back to the product description.' },
+        },
+        {
+          name: 'gallery',
+          type: 'relationship',
+          relationTo: 'media',
+          hasMany: true,
+          filterOptions: () => ({ mediaType: { equals: 'public' } }),
+          admin: { description: 'Public catalog images shown on the storefront.' },
         },
         {
           name: 'basePrice',
@@ -115,6 +151,13 @@ export const productsCollectionOverride = ({
           type: 'relationship',
           relationTo: 'categories',
           index: true,
+        },
+        {
+          name: 'tags',
+          type: 'relationship',
+          relationTo: 'product-tags',
+          hasMany: true,
+          filterOptions: () => true,
         },
         {
           name: 'minOrderQuantity',
@@ -224,11 +267,11 @@ export const productsCollectionOverride = ({
           .filter(Boolean)
       );
 
-      // Preserve native plugin fields (enableVariants, variantTypes, variants, prices, etc.)
-      // and guarantee zero duplicate field names
-      const preservedPluginFields = (defaultCollection.fields || []).filter(
-        (f) => 'name' in f && !explicitNames.has((f as any).name)
-      );
+      const preservedPluginFields = defaultCollection.fields
+        .filter((field) => !('name' in field) || !explicitNames.has(field.name))
+        .map((field) => field.type === 'join' && field.name === 'variants'
+          ? { ...field, admin: { ...field.admin, defaultColumns: ['title', 'sku', 'options', 'priceInEGP', '_status'] } }
+          : useMajorEgpField(field));
 
       return [...explicitFields, ...preservedPluginFields];
     })(),

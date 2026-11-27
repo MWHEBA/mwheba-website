@@ -14,7 +14,7 @@
 
 export interface CodEligibilityVerdict {
   eligible: boolean;
-  code?: 'COD_PROHIBITED_FOR_DIGITAL' | 'COD_PROHIBITED_FOR_MIXED_CART';
+  code?: 'COD_PROHIBITED_FOR_DIGITAL' | 'COD_PROHIBITED_FOR_MIXED_CART' | 'COD_REQUIRES_PHYSICAL_ITEMS';
   message?: string;
 }
 
@@ -26,7 +26,7 @@ export function validateCodEligibility(
   items: Array<{ itemType?: string }>
 ): CodEligibilityVerdict {
   const hasPhysical = items.some((i) => i.itemType === 'physical');
-  const hasService = items.some((i) => i.itemType === 'service' || i.itemType === 'fixed_service');
+  const hasService = items.some((i) => i.itemType !== 'physical');
 
   if (hasService && !hasPhysical) {
     return {
@@ -46,7 +46,11 @@ export function validateCodEligibility(
     };
   }
 
-  return { eligible: true };
+  return hasPhysical ? { eligible: true } : {
+    eligible: false,
+    code: 'COD_REQUIRES_PHYSICAL_ITEMS',
+    message: 'Cash on delivery requires a nonempty order of physical merchandise.',
+  };
 }
 
 // Re-export collection, refusal, and remittance services (PAY-02)

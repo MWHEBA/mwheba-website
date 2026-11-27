@@ -7,6 +7,10 @@
 
 ---
 
+## Reusable commerce platform
+
+Use the [reusable commerce implementation plan](commerce-platform/README.md) for future work on the white-label storefront. It contains module-level handoffs, dependency order and acceptance tests for a COD launch and independent client repositories copied from a reusable template.
+
 ## 1. Project Roadmap & Phase Completion Ledger
 
 ```

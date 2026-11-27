@@ -1,7 +1,9 @@
+import { openFixtureStock, shipFixtureOrder } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -49,8 +51,10 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
       body: body ? JSON.stringify(body) : undefined,
     });
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload);
     const password = 'Password2026!';
 
     // 1. Create primary customer
@@ -104,6 +108,7 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
     customProduct = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY04-TUMBLER',
         title: 'PAY-04 Custom Thermal Tumbler',
         slug: `pay04-custom-tumbler-${unique()}`,
         itemType: 'physical',
@@ -114,12 +119,14 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', customProduct.id);
     cleanup.products.push(customProduct.id);
 
     // 7. Create standard non-custom product
     standardProduct = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY04-NOTEBOOK',
         title: 'PAY-04 Ready-Made Notebook',
         slug: `pay04-ready-notebook-${unique()}`,
         itemType: 'physical',
@@ -129,10 +136,12 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', standardProduct.id);
     cleanup.products.push(standardProduct.id);
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     const del = async (collection: string, id: any, context?: any) => {
       try {
         await payload.delete({ collection, id, context });
@@ -187,11 +196,13 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
       },
       delivery: {
         method: 'shipping',
+        ...confirmedTestDelivery(quote),
         shippingAddress: { governorate: 'Cairo', city: 'New Cairo', streetAddress: '5th Settlement Plaza' },
         expectedShippingFee: quote.shippingFee,
       },
       paymentMethod,
       expectedGrandTotal: quote.grandTotal,
+      expectedQuoteConfirmation: quote.confirmation,
       idempotencyKey: `idemp_pay04_${unique()}`,
     });
 
@@ -199,6 +210,11 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
     order.total = Number(order.amount ?? order.total);
     cleanup.orders.push(order.id);
     return order;
+  };
+
+  const dispatchCustomizedOrder = async (orderId: number) => {
+    await approveProof(payload, { orderId, user: customerUser });
+    await shipFixtureOrder(payload, orderId, opsUser);
   };
 
   // ===========================================================================
@@ -347,6 +363,7 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
 
     it('records refusal at delivery: cancels order, returns fulfillment to origin, and preserves paymentStatus: unpaid', async () => {
       const order = await createCustomizedOrder('cod');
+      await dispatchCustomizedOrder(order.id);
       const reason = 'Recipient refused delivery upon courier arrival due to budget freeze.';
 
       const refusalResult = await recordDeliveryRefusal(payload, {
@@ -379,6 +396,7 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
 
     it('strictly blocks recording cash collection on a refused / cancelled order (CANNOT_COLLECT_CANCELLED_OR_REFUSED_ORDER)', async () => {
       const order = await createCustomizedOrder('cod');
+      await dispatchCustomizedOrder(order.id);
       await recordDeliveryRefusal(payload, {
         orderId: order.id,
         refusalReason: 'Package rejected by recipient office security.',
@@ -401,7 +419,11 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
     it('strictly forbids recording delivery refusal on an already paid order (CANNOT_REFUSE_PAID_ORDER)', async () => {
       const order = await createCustomizedOrder('cod');
 
-      // Collect payment first
+      await dispatchCustomizedOrder(order.id);
+      const { docs: [job] } = await payload.find({
+        collection: 'fulfillment-jobs', where: { order: { equals: order.id } }, depth: 0,
+      });
+      await transitionJob(payload, { jobId: job.id, to: 'delivered', user: opsUser });
       await recordCodCollection(payload, {
         orderId: order.id,
         collectedAmount: order.total,
@@ -423,6 +445,7 @@ describe('PAY-04: Pre-Production Proof Approval & Delivery Refusal Handling', ()
 
     it('supports recording delivery refusal via HTTP route POST /api/payments/cod/refuse with operations auth', async () => {
       const order = await createCustomizedOrder('cod');
+      await dispatchCustomizedOrder(order.id);
       const reason = 'Delivery refused: client company relocated.';
 
       // Customer attempt -> 403

@@ -76,7 +76,7 @@ export default async function FrontendLayout({
         />
       </head>
       <body className="site-layout">
-        <CartProvider>
+        <CartProvider locale={locale}>
           <SmoothScrollProvider>
             <ScrollRevealProvider>
               <Header locale={locale} />

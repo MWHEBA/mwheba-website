@@ -4,6 +4,7 @@ import configPromise from '@/payload.config';
 import sharp from 'sharp';
 import path from 'node:path';
 import fs from 'node:fs';
+import { privateUploadDir } from '@/modules/customization/collections/Media';
 
 describe('Image Upload & Sharp Processing Verification', () => {
   let payload: any;
@@ -104,8 +105,7 @@ describe('Image Upload & Sharp Processing Verification', () => {
     expect(mediaDoc.filename).toContain('test_sharp_image_');
 
     // 4. Verify file persistence on disk
-    const uploadDir = path.resolve(process.cwd(), 'private-uploads');
-    createdFilePath = path.join(uploadDir, mediaDoc.filename);
+    createdFilePath = path.join(privateUploadDir, mediaDoc.filename);
     expect(fs.existsSync(createdFilePath)).toBe(true);
 
     // 5. Read back from disk with sharp and execute multi-format transformation

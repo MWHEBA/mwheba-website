@@ -1,9 +1,30 @@
-import type { CollectionConfig } from 'payload';
-import { hasRole, isAdmin, isFinance } from '../access/roles';
+import { createHash } from 'node:crypto';
+import { sql, type PostgresAdapter } from '@payloadcms/db-postgres';
+import { APIError, type CollectionConfig } from 'payload';
+import { hasRole, isStorefrontCustomer } from '../access/roles';
+import { accountLocale, normalizeCustomerEmail } from '../logic/accountPaths';
+import { customerPasswordResetEmail, customerSiteOrigin, secureAccountCookie } from '../services/customerMail';
 
 export const Users: CollectionConfig = {
   slug: 'users',
-  auth: true,
+  auth: {
+    cookies: { secure: secureAccountCookie(), sameSite: 'Lax' },
+    forgotPassword: {
+      expiration: 30 * 60 * 1000,
+      generateEmailHTML: ({ req, token } = {}) => {
+        if (!req || !token) throw new APIError('Password reset could not be started.', 400);
+        if (req.context.storefrontAccount) return customerPasswordResetEmail(req.context, token);
+        const origin = customerSiteOrigin();
+        if (!origin) throw new Error('Password recovery requires a configured public site origin.');
+        const adminPath = `${req.payload.config.routes.admin}${req.payload.config.admin.routes.reset}`;
+        const url = new URL(`${adminPath}/${encodeURIComponent(token)}`, origin);
+        return `<p>You requested a password reset.</p><a href="${url.href}">Reset your password</a>`;
+      },
+      generateEmailSubject: ({ req } = {}) => req?.context.storefrontAccount && accountLocale(req.context.customerLocale) === 'ar'
+        ? 'إعادة تعيين كلمة المرور لحسابك'
+        : 'Reset your password',
+    },
+  },
   admin: {
     useAsTitle: 'email',
     defaultColumns: ['name', 'email', 'roles'],
@@ -63,6 +84,14 @@ export const Users: CollectionConfig = {
       },
     },
     {
+      name: 'defaultAddress',
+      type: 'relationship',
+      relationTo: 'addresses',
+      index: true,
+      access: { create: () => false },
+      admin: { position: 'sidebar' },
+    },
+    {
       name: 'roles',
       type: 'select',
       hasMany: true,
@@ -86,28 +115,58 @@ export const Users: CollectionConfig = {
     },
   ],
   hooks: {
+    beforeLogin: [({ req, user }) => {
+      if (req.context.storefrontAccount && !isStorefrontCustomer({ ...user, collection: 'users' })) {
+        throw new APIError('Invalid sign-in details.', 401);
+      }
+    }],
     beforeOperation: [
-      ({ req, operation, args }: any) => {
+      async ({ req, operation, args }) => {
         const isSuperAdmin =
           Boolean(hasRole(req.user, ['super_admin'])) ||
           Boolean(req.context?.isSystemSeed);
 
-        if (operation === 'update' && !isSuperAdmin && args?.data?.roles) {
+        if (operation === 'update' && !isSuperAdmin && args.data?.roles) {
           throw new Error('Privilege Escalation Forbidden: Only super administrators can modify user roles.');
         }
 
-        if (operation === 'create' && !isSuperAdmin && args?.data) {
+        if (operation === 'create' && !isSuperAdmin && args.data) {
           args.data.roles = ['customer'];
+        }
+
+        if (operation === 'resetPassword') {
+          // The pinned Payload operation reads the token before updating by user ID.
+          // Serialize the read and update for this token across native and storefront routes.
+          const token = args.data.token;
+          if (typeof token !== 'string' || !/^[a-f0-9]{40}$/.test(token)) {
+            throw new APIError('Invalid or expired reset token.', 400, undefined, true);
+          }
+          const db = req.payload.db as unknown as PostgresAdapter;
+          const transactionID = await req.transactionID;
+          const tx = transactionID == null ? undefined : db.sessions?.[transactionID]?.db;
+          if (!tx) throw new APIError('Password reset is temporarily unavailable.', 503);
+          const key = createHash('sha256').update(token).digest('hex');
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 422917))`);
+          if (req.context.storefrontAccount) {
+            const target = await req.payload.db.findOne({ collection: 'users', req, where: {
+              resetPasswordToken: { equals: token },
+              resetPasswordExpiration: { greater_than: new Date().toISOString() },
+            } });
+            if (!target || !isStorefrontCustomer({ ...target, collection: 'users' })) {
+              throw new APIError('Invalid or expired reset token.', 400, undefined, true);
+            }
+          }
         }
       },
     ],
     beforeChange: [
-      ({ req, operation, data, originalDoc }) => {
+      async ({ req, operation, data, originalDoc }) => {
         const isSuperAdmin =
           Boolean(hasRole(req.user, ['super_admin'])) ||
           Boolean(req.context?.isSystemSeed);
 
         if (operation === 'create') {
+          delete data.defaultAddress;
           if (!isSuperAdmin) {
             data.roles = ['customer'];
           }
@@ -128,6 +187,15 @@ export const Users: CollectionConfig = {
               data.roles = originalDoc.roles;
             }
           }
+        }
+
+        if (typeof data.email === 'string') data.email = normalizeCustomerEmail(data.email);
+        if (operation === 'update' && data.defaultAddress != null) {
+          const { docs } = await req.payload.find({
+            collection: 'addresses', depth: 0, limit: 1, req,
+            where: { id: { equals: data.defaultAddress }, customer: { equals: originalDoc.id } },
+          });
+          if (docs.length === 0) throw new APIError('The selected address is unavailable.', 404, undefined, true);
         }
         return data;
       },

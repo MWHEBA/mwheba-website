@@ -3,13 +3,16 @@
  * Atomic order creation workflow inside a PostgreSQL transaction (D-007, D-009, D-010, D-011, D-013, D-015, D-017, D-021).
  */
 
-import type { Payload } from 'payload';
-import { validateCartMoq } from '../../cart-checkout/logic/moqEngine';
-import { withCartLock } from '../../cart-checkout/services/cartStorage';
-import { resolveDeliveryTariff, getCommerceSettings } from './deliveryTariff';
+import { APIError, type Payload, type PayloadRequest } from 'payload';
+import { sql } from '@payloadcms/db-postgres';
+import type { Order } from '@/payload-types';
+import { isDeepStrictEqual } from 'node:util';
+import { isRetiredCart, withCartLock } from '../../cart-checkout/services/cartStorage';
+import type { CheckoutFulfillmentMethod } from './checkoutFulfillment';
+import { priceCheckoutCart, type CheckoutPaymentMethod, type CheckoutShippingAddress } from './checkoutQuote';
 import { createJobsForOrder } from '@/modules/fulfillment/services/fulfillmentService';
-import { customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
-import { validateCodEligibility } from '@/modules/payments/services/codEngine';
+import { normalizeCustomerEmail, validCustomerEmail } from '@/modules/identity/logic/accountPaths';
+import { allocateOrderInventory, getInventoryTransaction, inventoryOrderError } from '@/modules/inventory/services/inventoryService';
 
 export interface CreateOrderCustomerInput {
   email: string;
@@ -21,13 +24,11 @@ export interface CreateOrderCustomerInput {
 }
 
 export interface CreateOrderDeliveryInput {
-  method: 'shipping' | 'pickup';
-  shippingAddress?: {
-    governorate: string;
-    city: string;
-    streetAddress: string;
-    buildingDetails?: string;
-  };
+  method: CheckoutFulfillmentMethod;
+  optionId?: string;
+  expectedFulfillmentConfirmation?: string;
+  addressId?: number;
+  shippingAddress?: CheckoutShippingAddress;
   fulfillmentNotes?: string;
   /** Shipping fee the customer was shown (from the server quote). Rejected with 409 if it differs from the server tariff. */
   expectedShippingFee?: number;
@@ -43,10 +44,12 @@ export interface CreateOrderFromCartInput {
     roles?: string[];
   } | null;
   customer: CreateOrderCustomerInput;
-  delivery: CreateOrderDeliveryInput;
-  paymentMethod: 'cod' | 'bank_transfer';
+  delivery?: CreateOrderDeliveryInput;
+  paymentMethod: CheckoutPaymentMethod;
   /** Grand total the customer saw (from the server quote). REQUIRED: rejected with 409 if the server total differs. */
   expectedGrandTotal: number;
+  /** Confirmation returned by the server for the displayed lines, charges and fulfillment. */
+  expectedQuoteConfirmation: string | null;
 }
 
 export interface CreateOrderResult {
@@ -56,6 +59,37 @@ export interface CreateOrderResult {
   customerId: number;
   userCreated: boolean;
   isIdempotentReplay?: boolean;
+}
+
+function priceQuoteMismatch(expectedTotal: number, currentTotal: number | null | undefined) {
+  const message = expectedTotal === currentTotal
+    ? 'The quoted order details changed. Please review the updated quote.'
+    : `Displayed total (${expectedTotal}) differs from the current server total (${currentTotal ?? 'unavailable'}). Please review the updated quote.`;
+  return Object.assign(
+    new Error(`PRICE_QUOTE_MISMATCH: ${message}`),
+    { statusCode: 409 },
+  );
+}
+
+function orderLinePricing(item: NonNullable<Order['items']>[number]) {
+  return [
+    typeof item.product === 'object' ? item.product?.id : item.product,
+    (typeof item.variant === 'object' ? item.variant?.id : item.variant) ?? null,
+    item.sku ?? '', item.fulfillmentType, item.quantity, item.unitPrice, item.customizationFee, item.lineTotal,
+    item.artworkAssetId ?? '', item.printingNotes ?? '',
+  ];
+}
+
+async function readCommittedCheckout(payload: Payload, cartId: number, order: Order) {
+  const closedCart = await payload.findByID({ collection: 'carts', id: cartId, depth: 0, disableErrors: true });
+  if (!closedCart?.purchasedAt || closedCart.items?.length) return null;
+  const persisted = await payload.findByID({ collection: 'orders', id: order.id, depth: 0, disableErrors: true });
+  const persistedCartId = typeof persisted?.cart === 'object' ? persisted.cart?.id : persisted?.cart;
+  const actorId = typeof order.customer === 'object' ? order.customer?.id : order.customer;
+  const persistedActor = typeof persisted?.customer === 'object' ? persisted.customer?.id : persisted?.customer;
+  if (persistedCartId !== cartId || persistedActor !== actorId
+    || (persisted?.idempotencyKey || undefined) !== (order.idempotencyKey || undefined)) return null;
+  return persisted ?? null;
 }
 
 /**
@@ -71,7 +105,7 @@ export interface CreateOrderResult {
  * 6. Paymob selection is strictly prohibited at this stage and rejected with 422 (D-008).
  * 7. Seamless inline registration: Guest enters password directly. No temporary passwords. If email already registered, rejects with 409.
  * 8. OrderItems snapshot is frozen (productTitle, variantTitle, sku, basePrice, customizationFee, lineTotal, artwork details).
- * 9. Delivery tariff: Standard shipping and pickup fees resolved via delivery tariff engine and marked as provisional pending owner sign-off (D-015).
+ * 9. Physical fulfillment is resolved from the approved pilot configuration and checked against the buyer's quote.
  * 10. Statuses initialized: orderStatus = 'pending', paymentStatus = 'unpaid', fulfillmentStatus = 'unfulfilled'.
  * 11. Transaction requirement: Fails immediately if beginTransaction is not available; full rollback on any failure.
  */
@@ -81,7 +115,7 @@ export async function createOrderFromCart(
 ): Promise<CreateOrderResult> {
   const { cartId, guestSecret, idempotencyKey, user, customer, delivery, paymentMethod } = input;
 
-  if (!cartId || typeof cartId !== 'number') {
+  if (!Number.isSafeInteger(cartId) || cartId < 1) {
     const err = new Error('INVALID_CART_ID: Valid numeric cart ID is required.');
     (err as any).statusCode = 400;
     throw err;
@@ -96,11 +130,8 @@ export async function createOrderFromCart(
     throw err;
   }
 
-  // The customer must confirm the exact total they saw; direct calls cannot skip this approval step.
-  if (typeof input.expectedGrandTotal !== 'number' || !Number.isFinite(input.expectedGrandTotal)) {
-    const err = new Error('EXPECTED_GRAND_TOTAL_REQUIRED: expectedGrandTotal (the total shown to the customer) is required to place an order.');
-    (err as any).statusCode = 400;
-    throw err;
+  if (paymentMethod !== 'cod' && paymentMethod !== 'bank_transfer') {
+    throw new APIError('PAYMENT_METHOD_UNAVAILABLE: Choose an available payment method.', 422);
   }
 
   // 1. Execute entire order workflow under the cart's PostgreSQL advisory lock
@@ -109,9 +140,10 @@ export async function createOrderFromCart(
     const cart = await payload.findByID({
       collection: 'carts',
       id: cartId,
+      depth: 0,
     });
 
-    if (!cart) {
+    if (!cart || isRetiredCart(cart)) {
       const err = new Error(`CART_NOT_FOUND: Cart ID ${cartId} does not exist.`);
       (err as any).statusCode = 404;
       throw err;
@@ -126,7 +158,7 @@ export async function createOrderFromCart(
         throw err;
       }
     } else {
-      if (!guestSecret || String(cart.secret || '') !== String(guestSecret)) {
+      if (cart.customer || !guestSecret || String(cart.secret || '') !== String(guestSecret)) {
         const err = new Error('FORBIDDEN_CART_ACCESS: Invalid guest session secret for this cart.');
         (err as any).statusCode = 403;
         throw err;
@@ -159,7 +191,8 @@ export async function createOrderFromCart(
         ? String(orderCustId) === String(user.id)
         : (guestSecret && String(cart.secret || '') === String(guestSecret));
 
-      if (isAuthorized && existingOrder.orderStatus !== 'cancelled') {
+      const matchesOperation = (existingOrder.idempotencyKey || undefined) === (idempotencyKey || undefined);
+      if (cart.purchasedAt && isAuthorized && matchesOperation) {
         return {
           success: true,
           order: existingOrder,
@@ -171,16 +204,20 @@ export async function createOrderFromCart(
       }
     }
 
+    if (typeof input.expectedGrandTotal !== 'number' || !Number.isFinite(input.expectedGrandTotal)) {
+      throw new APIError('EXPECTED_GRAND_TOTAL_REQUIRED: expectedGrandTotal (the total shown to the customer) is required to place an order.', 400);
+    }
+
     // Check non-empty items only after checking for existing committed order
-    if (!cart.items || !Array.isArray(cart.items) || cart.items.length === 0) {
+    if (cart.purchasedAt || !cart.items || !Array.isArray(cart.items) || cart.items.length === 0) {
       const err = new Error('EMPTY_CART: Cannot checkout an empty cart.');
       (err as any).statusCode = 400;
       throw err;
     }
 
     // 4. Customer validation & seamless registration check (D-013)
-    const normalizedEmail = (customer.email || '').trim().toLowerCase();
-    if (!normalizedEmail || !normalizedEmail.includes('@')) {
+    const normalizedEmail = normalizeCustomerEmail(user?.email ?? customer.email);
+    if (!validCustomerEmail(normalizedEmail)) {
       const err = new Error('INVALID_EMAIL: A valid customer email is required for checkout.');
       (err as any).statusCode = 400;
       throw err;
@@ -204,109 +241,10 @@ export async function createOrderFromCart(
       throw err;
     }
 
-    // Check delivery validation
-    if (delivery.method === 'shipping') {
-      const addr = delivery.shippingAddress;
-      if (!addr?.governorate?.trim() || !addr?.city?.trim() || !addr?.streetAddress?.trim()) {
-        const err = new Error('INCOMPLETE_SHIPPING_ADDRESS: Governorate, city, and street address are required for standard shipping.');
-        (err as any).statusCode = 400;
-        throw err;
-      }
-    }
-
-    // 5. Server-authoritative catalog pricing, variant verification, and MOQ calculation
-    const productMap = new Map<string | number, any>();
-    const variantMap = new Map<string | number, any>();
-    const attachedAssetIds: string[] = [];
-
-    for (const item of cart.items) {
-      const prodId = typeof item.product === 'object' && item.product !== null ? (item.product as any).id : item.product;
-      if (!prodId) {
-        const err = new Error('MALFORMED_CART_ITEM: Missing product reference.');
-        (err as any).statusCode = 400;
-        throw err;
-      }
-
-      if (!productMap.has(prodId)) {
-        const product = await payload.findByID({
-          collection: 'products',
-          id: prodId,
-        });
-        if (!product) {
-          const err = new Error(`PRODUCT_NOT_FOUND: Product ID ${prodId} not found in catalog.`);
-          (err as any).statusCode = 404;
-          throw err;
-        }
-        productMap.set(prodId, product);
-      }
-
-      if (item.variant) {
-        const varId = typeof item.variant === 'object' && item.variant !== null ? (item.variant as any).id : item.variant;
-        if (!variantMap.has(varId)) {
-          const variant = await payload.findByID({
-            collection: 'variants',
-            id: varId,
-          });
-          if (!variant) {
-            const err = new Error(`VARIANT_NOT_FOUND: Variant ID ${varId} not found in catalog.`);
-            (err as any).statusCode = 404;
-            throw err;
-          }
-          variantMap.set(varId, variant);
-        }
-
-        const variantDoc = variantMap.get(varId);
-        const parentProdId = typeof variantDoc.product === 'object' && variantDoc.product !== null ? variantDoc.product.id : variantDoc.product;
-        if (String(parentProdId) !== String(prodId)) {
-          const err = new Error(`VARIANT_MISMATCH: Variant ${varId} does not belong to product ${prodId}.`);
-          (err as any).statusCode = 422;
-          throw err;
-        }
-      }
-
-      if (item.artworkAssetId) {
-        attachedAssetIds.push(String(item.artworkAssetId));
-      }
-    }
-
-    // MOQ validation (D-009)
-    const cartForMoq = cart.items.map((item: any) => {
-      const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-      const prod = productMap.get(prodId);
-      return {
-        productId: String(prodId),
-        productTitle: prod.title || 'Product',
-        itemType: prod.itemType || 'physical',
-        minOrderQuantity: prod.minOrderQuantity || 1,
-        quantity: Number(item.quantity) || 1,
-        variantId: item.variant ? String(typeof item.variant === 'object' ? item.variant.id : item.variant) : undefined,
-      };
-    });
-
-    const moqResult = validateCartMoq(cartForMoq);
-    if (!moqResult.valid) {
-      const err = new Error(`MOQ_VIOLATION: ${moqResult.errors.join('; ')}`);
-      (err as any).statusCode = 422;
-      throw err;
-    }
-
-    // COD Scope & Restrictions (D-021 & PAY-01)
-    if (paymentMethod === 'cod') {
-      const itemsForCod = cart.items.map((item: any) => {
-        const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-        return { itemType: productMap.get(prodId)?.itemType || 'physical' };
-      });
-      const codVerdict = validateCodEligibility(itemsForCod);
-      if (!codVerdict.eligible) {
-        const err = new Error(`${codVerdict.code}: ${codVerdict.message}`);
-        (err as any).statusCode = 422;
-        throw err;
-      }
-    }
-
     // 6. STRICT POSTGRESQL TRANSACTION ENFORCEMENT
     // Operating without transactions is strictly prohibited. If beginTransaction is missing or fails, throw immediately.
-    if (typeof (payload.db as any)?.beginTransaction !== 'function') {
+    if (typeof payload.db?.beginTransaction !== 'function' || typeof payload.db.commitTransaction !== 'function'
+      || typeof payload.db.rollbackTransaction !== 'function') {
       const err = new Error(
         'DATABASE_TRANSACTION_UNAVAILABLE: PostgreSQL transaction support is strictly required for atomic order creation. Operating without transactions is prohibited.'
       );
@@ -314,7 +252,7 @@ export async function createOrderFromCart(
       throw err;
     }
 
-    const transactionID = await (payload.db as any).beginTransaction();
+    const transactionID = await payload.db.beginTransaction();
     if (!transactionID) {
       const err = new Error(
         'TRANSACTION_BEGIN_FAILED: Could not establish a database transaction for order creation.'
@@ -323,7 +261,7 @@ export async function createOrderFromCart(
       throw err;
     }
 
-    const txReq: any = {
+    const txReq: Partial<PayloadRequest> = {
       payload,
       transactionID,
       context: {
@@ -331,7 +269,86 @@ export async function createOrderFromCart(
       },
     };
 
+    let attemptedOrder: Order | undefined;
+
     try {
+      const tx = await getInventoryTransaction(payload, txReq);
+      await tx.execute(sql`SELECT id FROM carts WHERE id = ${cartId} FOR UPDATE`);
+      const lockedCart = await payload.findByID({ collection: 'carts', id: cartId, depth: 0, req: txReq });
+      if (lockedCart.purchasedAt || !lockedCart.items?.length || isRetiredCart(lockedCart)) {
+        throw new APIError('EMPTY_CART: Cannot checkout a closed or empty cart.', 400);
+      }
+      if (lockedCart.customer !== cart.customer || lockedCart.secret !== cart.secret) {
+        throw new APIError('FORBIDDEN_CART_ACCESS: Cart ownership changed. Reopen checkout.', 403);
+      }
+
+      const priced = await priceCheckoutCart(payload, lockedCart, {
+        method: delivery?.method,
+        optionId: delivery?.optionId,
+        addressId: delivery?.addressId,
+        customerId: user?.id,
+        shippingAddress: delivery?.shippingAddress,
+      }, txReq);
+      const { quote, lines, summary, shippingAddress: shippingAddressInput, amounts, settings, codEligibility } = priced;
+      const { fulfillment } = quote;
+      const option = fulfillment.selected;
+
+      const unavailableLine = lines.find((line) => line.availabilityError);
+      if (unavailableLine?.availabilityError) {
+        throw new APIError(unavailableLine.availabilityError, 422);
+      }
+      const stockLine = lines.find((line) => line.stockIssue);
+      if (stockLine?.stockIssue) {
+        const label = stockLine.variantTitle ? `${stockLine.productTitle} (${stockLine.variantTitle})` : stockLine.productTitle;
+        throw inventoryOrderError(stockLine.stockIssue, label);
+      }
+      if (!summary.canCheckout) {
+        throw new APIError(`MOQ_VIOLATION: ${summary.validationErrors.join('; ')}`, 422);
+      }
+      if (paymentMethod === 'cod' && !codEligibility.eligible) {
+        throw new APIError(`${codEligibility.code}: ${codEligibility.message}`, 422);
+      }
+      if (fulfillment.required && (delivery?.method === 'shipping' || option?.method === 'shipping')
+        && ![shippingAddressInput?.governorate, shippingAddressInput?.city, shippingAddressInput?.streetAddress]
+          .every((value) => typeof value === 'string' && value.trim())) {
+        throw new APIError('INCOMPLETE_SHIPPING_ADDRESS: Governorate, city, and street address are required for courier delivery.', 400);
+      }
+
+      if (fulfillment.required) {
+        const hasConfirmation = Boolean(delivery?.optionId && delivery.expectedFulfillmentConfirmation);
+        if (hasConfirmation && (!option || delivery?.expectedFulfillmentConfirmation !== option.confirmation)) {
+          throw new APIError('FULFILLMENT_QUOTE_MISMATCH: Delivery or pickup has changed. Review the updated quote.', 409);
+        }
+        if (!option) {
+          throw new APIError(`FULFILLMENT_UNAVAILABLE: ${fulfillment.issue ?? 'Choose an available fulfillment method.'}`, 422);
+        }
+        if (!hasConfirmation) {
+          throw new APIError('EXPECTED_FULFILLMENT_REQUIRED: Confirm the quoted delivery or pickup option before placing the order.', 400);
+        }
+        if (paymentMethod === 'cod' && !quote.codEligible) {
+          throw new APIError('COD_PROHIBITED_FOR_FULFILLMENT: Cash on Delivery is unavailable for the selected option.', 422);
+        }
+      }
+      if (option && typeof delivery?.expectedShippingFee === 'number' && delivery.expectedShippingFee !== amounts.shippingFee) {
+        throw new APIError(`SHIPPING_QUOTE_MISMATCH: Displayed shipping fee (${delivery.expectedShippingFee}) differs from the current server quote (${amounts.shippingFee}). Please review the updated total.`, 409);
+      }
+      if (input.expectedGrandTotal !== amounts.grandTotal) {
+        throw priceQuoteMismatch(input.expectedGrandTotal, amounts.grandTotal);
+      }
+      const expectedConfirmation = input.expectedQuoteConfirmation;
+      if (typeof expectedConfirmation === 'string' && expectedConfirmation.length > 0 && expectedConfirmation !== quote.confirmation) {
+        throw priceQuoteMismatch(input.expectedGrandTotal, amounts.grandTotal);
+      }
+      if (!quote.paymentMethods.includes(paymentMethod)) {
+        throw new APIError('BANK_TRANSFER_UNAVAILABLE: Choose an available payment method.', 422);
+      }
+      if (amounts.grandTotalPiastres <= 0) {
+        throw new APIError('INVALID_ORDER_TOTAL: The order total must be greater than zero.', 422);
+      }
+      if (!quote.confirmation || typeof expectedConfirmation !== 'string' || !expectedConfirmation) {
+        throw new APIError('EXPECTED_QUOTE_CONFIRMATION_REQUIRED: Confirm the current server quote before placing the order.', 400);
+      }
+
       // 7. Seamless User Registration / Association
       let customerId: number;
       let userCreated = false;
@@ -357,9 +374,9 @@ export async function createOrderFromCart(
           throw err;
         }
 
-        if (!customer.password || customer.password.length < 8) {
+        if (typeof customer.password !== 'string' || customer.password.length < 8 || customer.password.length > 128) {
           const err = new Error(
-            'PASSWORD_REQUIRED: Customer must specify a password of at least 8 characters for seamless account creation. Temporary passwords are strictly forbidden.'
+            'PASSWORD_REQUIRED: Customer must specify a password between 8 and 128 characters.'
           );
           (err as any).statusCode = 400;
           throw err;
@@ -370,6 +387,9 @@ export async function createOrderFromCart(
           data: {
             email: normalizedEmail,
             password: customer.password,
+            name: customer.contactPerson.trim(),
+            companyName: customer.companyName.trim(),
+            taxId: customer.taxId?.trim(),
             roles: ['customer'],
           },
           req: txReq,
@@ -380,6 +400,7 @@ export async function createOrderFromCart(
       }
 
       // 8. Verify artwork asset references
+      const attachedAssetIds = lines.flatMap((line) => line.artworkAssetId ? [line.artworkAssetId] : []);
       for (const assetId of attachedAssetIds) {
         const asset = await payload.findByID({
           collection: 'artwork-assets',
@@ -394,106 +415,44 @@ export async function createOrderFromCart(
         }
       }
 
-      // 9. Build frozen OrderItems snapshot
-      const orderItems = cart.items.map((item: any) => {
-        const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-        const prod = productMap.get(prodId);
-        const varId = item.variant
-          ? typeof item.variant === 'object' && item.variant !== null
-            ? item.variant.id
-            : item.variant
-          : undefined;
-        const variantDoc = varId ? variantMap.get(varId) : undefined;
-
-        let unitPrice = 0;
-        if (variantDoc && typeof variantDoc.priceInEGP === 'number') {
-          unitPrice = variantDoc.priceInEGP;
-        } else if (typeof prod.priceInEGP === 'number') {
-          unitPrice = prod.priceInEGP;
-        } else if (typeof prod.basePrice === 'number') {
-          unitPrice = prod.basePrice;
-        }
-
-        const qty = Number(item.quantity) || 1;
-        const feePerUnit = customizationFeePerUnit(item, prod);
-        const lineTotal = (unitPrice + feePerUnit) * qty;
-
-        return {
-          product: prodId,
-          variant: varId || undefined,
-          productTitle: prod.title || 'Product',
-          variantTitle: variantDoc?.title || '',
-          sku: variantDoc?.sku || prod.sku || '',
-          quantity: qty,
-          unitPrice,
-          customizationFee: feePerUnit,
-          lineTotal,
-          fulfillmentType: prod.itemType || 'physical',
-          artworkAssetId: item.artworkAssetId || undefined,
-          printingNotes: item.printingNotes || '',
-        };
-      });
-
-      // 10. Delivery Tariff Resolution (D-015 Parameterization via CommerceSettings)
-      const settings = await getCommerceSettings(payload);
-      const tariffQuote = resolveDeliveryTariff({
-        method: delivery.method,
-        governorate: delivery.shippingAddress?.governorate,
-        schedule: settings,
-      });
-
-      if (typeof delivery.expectedShippingFee === 'number' && delivery.expectedShippingFee !== tariffQuote.amount) {
-        const err = new Error(`SHIPPING_QUOTE_MISMATCH: Displayed shipping fee (${delivery.expectedShippingFee}) differs from the current server quote (${tariffQuote.amount}). Please review the updated total.`);
-        (err as any).statusCode = 409;
-        throw err;
-      }
-
-      const shippingFee = tariffQuote.amount;
-
-      // Server-authoritative total vs. the total the customer saw. Any drift (product price,
-      // customization fee, tariff) is rejected with 409 BEFORE the order is created.
-      if (typeof input.expectedGrandTotal === 'number') {
-        const serverGrandTotal = orderItems.reduce((sum: number, line: any) => sum + line.lineTotal, 0) + shippingFee;
-        if (input.expectedGrandTotal !== serverGrandTotal) {
-          const err = new Error(`PRICE_QUOTE_MISMATCH: Displayed total (${input.expectedGrandTotal}) differs from the current server total (${serverGrandTotal}). Please review the updated quote.`);
-          (err as any).statusCode = 409;
-          throw err;
-        }
-      }
-      const fulfillmentNotes = delivery.method === 'pickup'
-        ? (delivery.fulfillmentNotes
-            ? `${delivery.fulfillmentNotes} • ${tariffQuote.fulfillmentNoteEn}`
-            : tariffQuote.fulfillmentNoteEn)
-        : (delivery.fulfillmentNotes || tariffQuote.fulfillmentNoteEn);
+      const orderItems: NonNullable<Order['items']> = lines.map((line) => ({
+        product: line.productId,
+        variant: line.variantId,
+        productTitle: line.productTitle,
+        variantTitle: line.variantTitle,
+        sku: line.sku,
+        quantity: line.quantity,
+        unitPrice: line.unitPrice,
+        customizationFee: line.customizationFeePerUnit,
+        lineTotal: line.lineTotal,
+        fulfillmentType: line.itemType,
+        artworkAssetId: line.artworkAssetId,
+        printingNotes: line.printingNotes ?? '',
+      }));
+      const expectedOrderLinePricing = orderItems.map(orderLinePricing);
+      const fulfillmentNotes = option && typeof delivery?.fulfillmentNotes === 'string'
+        ? delivery.fulfillmentNotes.trim() : undefined;
 
       const shippingAddress =
-        delivery.method === 'shipping' && delivery.shippingAddress
+        option?.method === 'shipping' && shippingAddressInput
           ? {
               company: customer.companyName,
               firstName: customer.contactPerson,
               phone: customer.phone,
-              state: delivery.shippingAddress.governorate,
-              city: delivery.shippingAddress.city,
-              addressLine1: delivery.shippingAddress.streetAddress,
-              addressLine2: delivery.shippingAddress.buildingDetails || '',
+              state: shippingAddressInput.governorate.trim(),
+              city: shippingAddressInput.city.trim(),
+              addressLine1: shippingAddressInput.streetAddress.trim(),
+              addressLine2: typeof shippingAddressInput.buildingDetails === 'string'
+                ? shippingAddressInput.buildingDetails.trim() : '',
               country: 'EG' as const,
             }
           : undefined;
 
       // 11. Generate order number from sequence
-      let orderNumber = `MWH-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 90000)}`;
-      try {
-        const pool = (payload.db as any)?.pool;
-        if (pool) {
-          const seqRes = await pool.query("SELECT nextval('order_number_seq') AS seq");
-          const seq = seqRes.rows[0]?.seq;
-          if (seq) {
-            orderNumber = `MWH-${new Date().getFullYear()}-${String(seq).padStart(5, '0')}`;
-          }
-        }
-      } catch {
-        // Fallback to random unique format
-      }
+      const { rows: [orderSequence] } = await tx.execute<{ sequence: string }>(sql`
+        SELECT nextval('order_number_seq')::text AS sequence
+      `);
+      const orderNumber = `MWH-${new Date().getFullYear()}-${orderSequence.sequence.padStart(5, '0')}`;
 
       // 12. Create order record inside transaction with frozen snapshots
       const order = await payload.create({
@@ -508,31 +467,49 @@ export async function createOrderFromCart(
           contactPerson: customer.contactPerson,
           phone: customer.phone,
           taxId: customer.taxId || '',
-          deliveryMethod: delivery.method,
+          deliveryMethod: option?.method ?? null,
           fulfillmentNotes,
-          shippingAddress: shippingAddress as any,
-          items: orderItems as any,
-          shippingFee,
-          taxAmount: 0,
+          shippingAddress,
+          items: orderItems,
+          shippingFee: amounts.shippingFee,
+          taxAmount: amounts.taxAmount,
+          currency: quote.currency,
           taxReviewStatus: 'pending_accountant_review',
           paymentMethod,
           orderStatus: paymentMethod === 'cod' ? 'confirmed' : 'pending',
           paymentStatus: 'unpaid',
           fulfillmentStatus: 'unfulfilled',
           remittanceStatus: paymentMethod === 'cod' ? 'pending_collection' : 'not_applicable',
-          appliedTariff: {
-            status: tariffQuote.isProvisional ? 'provisional' : 'owner_approved',
-            amount: tariffQuote.amount,
-            currency: 'EGP',
-            governorate: delivery.shippingAddress?.governorate || null,
-            method: delivery.method,
-            tariffScheduleStatus: tariffQuote.tariffScheduleStatus,
+          appliedTariff: option ? {
+            status: 'owner_approved',
+            amount: option.amount,
+            currency: option.currency,
+            governorate: shippingAddress?.state ?? null,
+            regionCode: option.regionCode,
+            method: option.method,
+            optionId: option.id,
+            configurationReference: option.configurationReference,
+            codAllowed: option.codAllowed,
+            label: option.label,
+            ...(option.pickup ? { pickup: option.pickup } : {}),
+            tariffScheduleStatus: 'owner_approved',
             capturedAt: new Date().toISOString(),
-          },
+          } : null,
           appliedProductionPolicy: settings.productionPolicy || 'require_payment_clearance',
         },
         req: txReq,
       });
+
+      // The order hook re-reads the catalog. Reject offsetting edits as well as changes to the total.
+      if (order.grandTotalPiastres !== amounts.grandTotalPiastres
+        || order.amount !== amounts.grandTotal || order.currency !== quote.currency
+        || order.subtotal !== amounts.subtotal || order.totalCustomizationFees !== amounts.totalCustomizationFees
+        || order.shippingFee !== amounts.shippingFee || order.taxAmount !== amounts.taxAmount
+        || !isDeepStrictEqual(order.items?.map(orderLinePricing), expectedOrderLinePricing)) {
+        throw priceQuoteMismatch(input.expectedGrandTotal, order.amount);
+      }
+
+      await allocateOrderInventory(payload, txReq, order.id, lines);
 
       // 13. Transition attached artwork assets to committed_order
       for (const assetId of attachedAssetIds) {
@@ -562,26 +539,39 @@ export async function createOrderFromCart(
       await createJobsForOrder(payload, order, txReq);
 
       // 15. Commit PostgreSQL transaction
-      if (typeof (payload.db as any)?.commitTransaction === 'function') {
-        await (payload.db as any).commitTransaction(transactionID);
-      }
+      attemptedOrder = order;
+      await payload.db.commitTransaction(transactionID);
+      const persisted = await readCommittedCheckout(payload, cartId, order);
+      if (!persisted) throw new APIError('ORDER_COMMIT_UNCONFIRMED: Retry checkout with the same operation key.', 503);
 
       return {
         success: true,
-        order,
-        orderNumber: String(order.orderNumber || orderNumber),
+        order: persisted,
+        orderNumber: String(persisted.orderNumber || orderNumber),
         customerId,
         userCreated,
         isIdempotentReplay: false,
       };
     } catch (error) {
       // 16. Rollback on ANY failure
-      if (typeof (payload.db as any)?.rollbackTransaction === 'function') {
-        try {
-          await (payload.db as any).rollbackTransaction(transactionID);
-        } catch {
-          // Ignore secondary rollback errors
+      try {
+        await payload.db.rollbackTransaction(transactionID);
+      } catch {
+        // The commit path independently checks for a persisted order.
+      }
+      if (attemptedOrder) {
+        const recovered = await readCommittedCheckout(payload, cartId, attemptedOrder).catch(() => null);
+        if (recovered) {
+          return {
+            success: true,
+            order: recovered,
+            orderNumber: String(recovered.orderNumber || ''),
+            customerId: Number(typeof recovered.customer === 'object' ? recovered.customer?.id : recovered.customer),
+            userCreated: false,
+            isIdempotentReplay: true,
+          };
         }
+        throw new APIError('ORDER_COMMIT_UNCONFIRMED: Retry checkout with the same operation key.', 503);
       }
       throw error;
     }

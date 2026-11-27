@@ -22,11 +22,12 @@ This is a **candidate architecture pending a blocking feasibility POC**. If the 
 3. `cart-checkout`: cart lifecycle, quantity rules, address/company fields, price validation.
 4. `customization`: line-level artwork uploads, validation, metadata, order snapshot.
 5. `orders`: order lifecycle, line items, customer view, admin operations.
-6. `payments`: gateway adapter, bank transfer workflow, webhook processing, reconciliation.
-7. `billing`: invoice references, tax integration boundary, refund/credit-note metadata.
-8. `fulfillment`: physical production/shipping and service brief/delivery workflows.
-9. `identity`: users, guests, RBAC, sessions, account security.
-10. `integrations`: email, optional notifications, future CRM/n8n hooks.
+6. `inventory`: canonical tracked balance per sellable SKU and audited movements, transactionally coordinated with orders and eligible cancellation/return transitions.
+7. `payments`: gateway adapter, bank transfer workflow, webhook processing, reconciliation.
+8. `billing`: invoice references, tax integration boundary, refund/credit-note metadata.
+9. `fulfillment`: physical production/shipping and service brief/delivery workflows.
+10. `identity`: users, guests, RBAC, sessions, account security.
+11. `integrations`: email, optional notifications, future CRM/n8n hooks.
 
 The exact module layout must match verified Payload/plugin extension points. Do not invent hooks or interfaces.
 
@@ -71,7 +72,7 @@ The exact module layout must match verified Payload/plugin extension points. Do 
 - Mixed physical/service cart and correct fulfillment semantics without requiring shipping for services.
 - Payment provider integration: Cash on Delivery (COD) decoupled lifecycle (order execution does not mark paid; explicit collection tracking; two-stage courier remittance reconciliation; refusal handling; idempotency; custom branded proof approval gate). Manual bank transfer pending flow and controlled RBAC authorization/confirmation. (Online Paymob gateway formally deferred to Phase 2 per D-008).
 - Correct totals, atomic concurrency locking, and order/payment consistency under retries and downtime.
-- Basic refunds/cancellation and order status transitions (stock and inventory tracking strictly excluded per D-018).
+- Order creation, SKU allocation, cart closure, and fulfillment-job creation are atomic. Retry recovery must not allocate twice. Cancellation and inspected-return restoration follow D-018.
 
 ## 9. Architecture guardrails
 Do not:
@@ -80,7 +81,7 @@ Do not:
 - Trust client-submitted prices or totals; all calculations are server-authoritative.
 - Mark COD orders paid automatically upon order placement, shipping, or delivery; require explicit collection registration.
 - Permit unverified courier remittance without matching collected totals against deposit slips.
-- Introduce inventory or stock reservation tables (out of scope per D-018).
+- Enable Payload Ecommerce native inventory alongside the dedicated D-018 balance and movement service. Keep cart reservations and warehouse/location tracking out of scope.
 - Use a single status field to represent order, payment and fulfillment.
 - Add subscriptions to solve one-time service packages.
 - Assume plugin beta functionality is production-ready without tests.

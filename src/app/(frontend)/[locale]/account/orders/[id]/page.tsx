@@ -7,7 +7,10 @@ import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
 import { isValidLocale } from '@/shared/lib/i18n';
 import { getCommerceSettings } from '@/modules/orders/services/deliveryTariff';
+import { fulfillmentRegions, normalizeFulfillmentRegion } from '@/modules/orders/logic/fulfillmentRegions';
+import type { CheckoutFulfillmentOption } from '@/modules/orders/services/checkoutFulfillment';
 import { BankTransferReceiptUploadForm } from '@/modules/payments/ui/BankTransferReceiptUploadForm';
+import { accountLoginHref } from '@/modules/identity/logic/accountPaths';
 
 export const dynamic = 'force-dynamic';
 
@@ -55,7 +58,8 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
               : 'Please sign in to inspect order details and submit payment proof.'}
           </p>
           <Link
-            href={`/${locale}/account`}
+            href={accountLoginHref(locale, `/${locale}/account/orders/${id}`)}
+            prefetch={false}
             className="btn-primary"
             style={{
               display: 'inline-block',
@@ -76,6 +80,14 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
   if (!order || String(idOf(order.customer)) !== String(user.id)) {
     notFound();
   }
+
+  const appliedTariff = order.appliedTariff as (Partial<Pick<CheckoutFulfillmentOption, 'method' | 'label' | 'regionCode' | 'pickup'>> & {
+    governorate?: string | null;
+  }) | null | undefined;
+  const confirmedMethod = appliedTariff?.method;
+  const confirmedRegionCode = appliedTariff?.regionCode ?? normalizeFulfillmentRegion(appliedTariff?.governorate);
+  const confirmedRegion = fulfillmentRegions.find((region) => region.code === confirmedRegionCode)?.label[locale] ?? appliedTariff?.governorate;
+  const pickup = confirmedMethod === 'pickup' ? appliedTariff?.pickup : undefined;
 
   // Load operational bank details
   const settings = await getCommerceSettings(payload);
@@ -106,13 +118,22 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
   const hasServiceItems = Array.isArray(order.items) && order.items.some((i: any) => i.fulfillmentType === 'service');
 
   const orderTotal = Number(order.total || order.amount || 0);
+  const isCod = order.paymentMethod === 'cod';
+  const codOrderClosed = order.orderStatus === 'cancelled' || order.status === 'cancelled'
+    || order.fulfillmentStatus === 'returned_to_origin' || order.fulfillmentStatus === 'cancelled';
+  const codPickup = (confirmedMethod ?? order.deliveryMethod) === 'pickup';
+  const paymentStatusLabel = isCod && order.paymentStatus === 'unpaid'
+    ? (isArabic ? 'لم يُسدَّد' : 'Unpaid')
+    : isCod && order.paymentStatus === 'paid'
+      ? (isArabic ? 'تم السداد' : 'Paid')
+      : order.paymentStatus;
 
   return (
     <div className="container" style={{ paddingBlock: '3rem 5rem', maxWidth: '960px' }} dir={isArabic ? 'rtl' : 'ltr'}>
       {/* Breadcrumb / Back Link */}
       <div style={{ marginBottom: '1.5rem', fontSize: '0.8125rem', color: 'var(--text-muted)' }}>
-        <Link href={`/${locale}/store`} style={{ color: 'var(--brand-primary)', textDecoration: 'none' }}>
-          {isArabic ? '← العودة للمتجر' : '← Back to Catalog'}
+        <Link href={`/${locale}/account/orders`} style={{ color: 'var(--brand-primary)', textDecoration: 'none' }}>
+          {isArabic ? 'العودة إلى طلباتي' : 'Back to my orders'}
         </Link>
       </div>
 
@@ -146,7 +167,7 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
               border: `1px solid ${order.paymentStatus === 'paid' ? 'var(--status-success)' : 'var(--status-warning)'}`,
             }}
           >
-            {isArabic ? 'السداد:' : 'Payment:'} <strong>{order.paymentStatus}</strong>
+            {isArabic ? 'السداد:' : 'Payment:'} <strong>{paymentStatusLabel}</strong>
           </div>
         </div>
       </div>
@@ -178,7 +199,9 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
           <div style={{ fontSize: '0.875rem', lineHeight: '1.8' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: 'var(--text-secondary)' }}>{isArabic ? 'طريقة السداد:' : 'Payment Method:'}</span>
-              <strong>{order.paymentMethod === 'bank_transfer' ? (isArabic ? 'تحويل بنكي رسمي' : 'Bank Transfer') : 'Cash on Delivery (COD)'}</strong>
+              <strong>{order.paymentMethod === 'bank_transfer'
+                ? (isArabic ? 'تحويل بنكي رسمي' : 'Bank Transfer')
+                : isCod ? (isArabic ? 'الدفع عند الاستلام' : 'Cash on Delivery') : order.paymentMethod === 'paymob' ? 'Paymob' : '—'}</strong>
             </div>
             {order.shippingFee !== undefined && (
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -191,6 +214,28 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
               <span>{orderTotal.toLocaleString()} {isArabic ? 'ج.م' : 'EGP'}</span>
             </div>
           </div>
+
+          {(confirmedMethod === 'shipping' || confirmedMethod === 'pickup') && (
+            <section aria-labelledby="order-fulfillment-heading" style={{ marginBlockStart: '1.5rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
+              <h3 id="order-fulfillment-heading" style={{ fontSize: '0.9375rem', color: 'var(--brand-primary-dark)', margin: '0 0 0.5rem' }}>
+                {isArabic ? 'تفاصيل الاستلام' : 'Fulfillment details'}
+              </h3>
+              <p style={{ margin: 0 }}>
+                <strong>
+                  {appliedTariff?.label?.[locale] ?? (confirmedMethod === 'shipping'
+                    ? (isArabic ? 'التوصيل إلى العنوان' : 'Courier delivery')
+                    : (isArabic ? 'الاستلام' : 'Pickup'))}
+                </strong>
+                {confirmedMethod === 'shipping' && confirmedRegion && ` (${confirmedRegion})`}
+              </p>
+              {pickup && (
+                <>
+                  <p style={{ margin: '0.5rem 0 0', whiteSpace: 'pre-line' }}>{pickup.address[locale]}</p>
+                  <p style={{ margin: '0.25rem 0 0', whiteSpace: 'pre-line' }}>{pickup.instructions[locale]}</p>
+                </>
+              )}
+            </section>
+          )}
 
           {/* Service Brief CTA if applicable */}
           {hasServiceItems && (
@@ -286,16 +331,20 @@ export default async function CustomerOrderPage({ params }: OrderPageProps) {
                 />
               )}
             </div>
-          ) : (
+          ) : isCod && (
             /* Cash on Delivery Notice */
             <div style={{ border: '1px solid var(--border-default)', borderRadius: 'var(--radius-sm)', padding: '1.5rem', backgroundColor: 'var(--bg-secondary)' }}>
               <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--brand-primary-dark)', margin: '0 0 0.5rem' }}>
                 {isArabic ? 'الدفع عند الاستلام (COD)' : 'Cash on Delivery (COD)'}
               </h3>
               <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
-                {isArabic
-                  ? 'يتم سداد القيمة نقدًا لمندوب شركة الشحن عند تسليم الشحنة أو عند الاستلام المباشر من مقر الوكالة وفق ضوابط D-021.'
-                  : 'Payment is collected in cash upon courier handover or agency pickup per D-021 governance.'}
+                {order.paymentStatus === 'paid'
+                  ? (isArabic ? 'تم تسجيل استلام المبلغ النقدي لهذا الطلب.' : 'Cash payment has been recorded for this order.')
+                  : codOrderClosed && order.paymentStatus === 'unpaid'
+                    ? (isArabic ? 'أُغلق الطلب دون تحصيل أي مبلغ.' : 'This order was closed without collecting payment.')
+                    : order.paymentStatus === 'unpaid' && (codPickup
+                      ? (isArabic ? 'ادفع نقدًا عند استلام طلبك من نقطة الاستلام.' : 'Pay cash when you pick up your order.')
+                      : (isArabic ? 'ادفع نقدًا لمندوب الشحن عند تسلّم طلبك.' : 'Pay cash to the courier when you receive your order.'))}
               </p>
             </div>
           )}

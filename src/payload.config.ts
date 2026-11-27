@@ -1,4 +1,4 @@
-import { buildConfig } from 'payload';
+import { APIError, buildConfig, type Access, type CollectionBeforeChangeHook } from 'payload';
 import sharp from 'sharp';
 import { lineHasCustomization, customizationFeePerUnit } from '@/modules/cart-checkout/logic/customizationFee';
 import { postgresAdapter } from '@payloadcms/db-postgres';
@@ -6,7 +6,8 @@ import { lexicalEditor } from '@payloadcms/richtext-lexical';
 import { ecommercePlugin } from '@payloadcms/plugin-ecommerce';
 
 import { Users } from './modules/identity/collections/Users';
-import { hasRole } from './modules/identity/access/roles';
+import { hasRole, isStorefrontCustomer } from './modules/identity/access/roles';
+import { customerEmailAdapter, customerSiteOrigin } from './modules/identity/services/customerMail';
 import { Media } from './modules/customization/collections/Media';
 import { ArtworkAssets } from './modules/customization/collections/ArtworkAssets';
 import { BankTransfers } from './modules/payments/collections/BankTransfers';
@@ -14,10 +15,17 @@ import { PaymentEvents } from './modules/payments/collections/PaymentEvents';
 import { PaymentAttempts } from './modules/payments/collections/PaymentAttempts';
 import { PaymentCollections } from './modules/payments/collections/PaymentCollections';
 import { CourierRemittances } from './modules/payments/collections/CourierRemittances';
+import { codAuditEntries } from './modules/payments/services/codAudit';
+import { validateCodEligibility } from './modules/payments/services/codEngine';
 import { FulfillmentJobs } from './modules/fulfillment/collections/FulfillmentJobs';
 import { ServiceBriefs } from './modules/fulfillment/collections/ServiceBriefs';
 import { Categories } from './modules/catalog/collections/Categories';
+import { ProductTags } from './modules/catalog/collections/ProductTags';
 import { productsCollectionOverride } from './modules/catalog/collections/Products';
+import { variantsCollectionOverride } from './modules/catalog/collections/Variants';
+import { resolveCatalogSku, resolveCatalogUnitPrice } from './modules/catalog/services/catalogPrice';
+import { catalogSelectionError } from './modules/catalog/services/catalogProduct';
+import { isRetiredCart } from './modules/cart-checkout/services/cartStorage';
 import { Pages } from './modules/content/collections/Pages';
 import { PortfolioProjects } from './modules/content/collections/PortfolioProjects';
 import { BlogPosts } from './modules/content/collections/BlogPosts';
@@ -28,6 +36,10 @@ import { InquirySettings } from './modules/content/globals/InquirySettings';
 import { CommerceSettings } from './modules/orders/globals/CommerceSettings';
 import { validateCartMoq } from './modules/cart-checkout/logic/moqEngine';
 import { toIntegerPiastres } from './modules/orders/logic/orderSnapshotEngine';
+import { calculateCheckoutAmounts, priceCheckoutLine } from './modules/orders/logic/checkoutAmounts';
+import { getOrderLifecycleEndpoint, postOrderLifecycle } from './modules/orders/endpoints/orderLifecycle';
+import { lifecycleAuditEntries } from './modules/orders/services/orderLifecycle';
+import { inventoryEndpoints } from './modules/inventory/endpoints/inventory';
 // Paymob gateway engine is preserved dormant for Phase 2 (Decision D-008)
 // import { paymobWebhookHandler } from './modules/payments/endpoints/paymobWebhook';
 import { signPrivateMedia, downloadPrivateMedia } from './modules/customization/endpoints/privateMedia';
@@ -37,11 +49,17 @@ const isPostgres = dbUri.startsWith('postgres://') || dbUri.startsWith('postgres
 
 export default buildConfig({
   sharp,
+  email: customerEmailAdapter(),
+  serverURL: customerSiteOrigin(),
   secret: process.env.PAYLOAD_SECRET || 'mwheba-dev-foundation-secret-key-32chars-min',
   admin: {
     user: Users.slug,
+    components: {
+      beforeDashboard: ['@/modules/inventory/admin/InventoryControls#InventoryControls'],
+    },
   },
   endpoints: [
+    ...inventoryEndpoints,
     { path: '/private-media/:id/sign', method: 'post', handler: signPrivateMedia },
     { path: '/private-media/:id/download', method: 'get', handler: downloadPrivateMedia },
     // Decision D-008: Paymob online gateway is formally deferred to Phase 2.
@@ -69,6 +87,7 @@ export default buildConfig({
     Inquiries,
     RateLimitEvents,
     Categories,
+    ProductTags,
     Media,
     ArtworkAssets,
     BankTransfers,
@@ -111,7 +130,32 @@ export default buildConfig({
       customers: {
         slug: Users.slug,
       },
-      // Native exclusion of inventory tracking per DECISIONS.md D-018
+      addresses: {
+        addressesCollectionOverride: ({ defaultCollection }) => ({
+          ...defaultCollection,
+          fields: defaultCollection.fields.map((field) =>
+            field.type === 'select' && field.name === 'country'
+              ? { ...field, options: [...field.options, { label: 'Egypt', value: 'EG' }] }
+              : field),
+          access: {
+            ...defaultCollection.access,
+            create: ({ req }) => hasRole(req.user, ['super_admin']) || isStorefrontCustomer(req.user),
+          },
+          hooks: {
+            ...defaultCollection.hooks,
+            beforeChange: [
+              ...(defaultCollection.hooks?.beforeChange ?? []),
+              ({ data, operation, originalDoc }) => {
+                // An existing address can be edited or deleted, but never reassigned to
+                // another account, which could invalidate a customer's default address.
+                if (operation === 'update') data.customer = originalDoc.customer;
+                return data;
+              },
+            ],
+          },
+        }),
+      },
+      // Stock is maintained by the canonical inventory ledger (D-018).
       inventory: false,
       access: {
         isAdmin: ({ req }: any) => hasRole(req.user, ['super_admin']),
@@ -120,7 +164,7 @@ export default buildConfig({
           if (hasRole(req.user, ['super_admin', 'catalog_manager', 'marketer'])) return true;
           return { _status: { equals: 'published' } };
         },
-        isCustomer: ({ req }: any) => Boolean(req.user && !hasRole(req.user, ['super_admin', 'catalog_manager', 'operations', 'creative_director', 'finance', 'marketer'])),
+        isCustomer: ({ req }) => isStorefrontCustomer(req.user),
         isAuthenticated: ({ req }: any) => Boolean(req.user),
         isDocumentOwner: ({ req }: any) => {
           if (!req.user) return false;
@@ -139,7 +183,7 @@ export default buildConfig({
         ],
       },
       products: {
-        variants: true,
+        variants: { variantsCollectionOverride },
         productsCollectionOverride,
       },
       carts: {
@@ -153,6 +197,28 @@ export default buildConfig({
           );
         },
         cartsCollectionOverride: ({ defaultCollection }) => {
+          // Storefront writes go through the signed session and locked cart service.
+          // Keep native reads and staff administration available.
+          const staffCartAccess: Access = ({ req }) => hasRole(req.user, ['super_admin']);
+          defaultCollection.access = {
+            ...defaultCollection.access,
+            create: staffCartAccess,
+            update: staffCartAccess,
+            delete: staffCartAccess,
+          };
+          defaultCollection.endpoints = [];
+          defaultCollection.hooks = {
+            ...defaultCollection.hooks,
+            beforeChange: [
+              ({ originalDoc }) => {
+                if (originalDoc && isRetiredCart(originalDoc)) {
+                  throw new APIError('CART_NOT_ACTIVE', 409, undefined, true);
+                }
+              },
+              ...(defaultCollection.hooks?.beforeChange ?? []).map<CollectionBeforeChangeHook>((hook) => (args) =>
+                args.req.context?.preserveCartSubtotal ? args.data : hook(args)),
+            ],
+          };
           const itemsField = defaultCollection.fields.find((f: any) => f.name === 'items');
           if (itemsField && 'fields' in itemsField && Array.isArray(itemsField.fields)) {
             itemsField.fields.push(
@@ -178,7 +244,9 @@ export default buildConfig({
             name: 'appliedOperations',
             type: 'json',
             defaultValue: [],
+            access: { create: () => false, update: () => false },
             admin: {
+              readOnly: true,
               description: 'Independent idempotency operation keys applied to this cart',
             },
           });
@@ -258,8 +326,48 @@ export default buildConfig({
 
           return {
             ...defaultCollection,
+            admin: {
+              ...defaultCollection.admin,
+              useAsTitle: 'orderNumber',
+              defaultColumns: ['orderNumber', 'orderStatus', 'fulfillmentStatus', 'paymentStatus', 'remittanceStatus', 'createdAt'],
+              components: {
+                ...defaultCollection.admin?.components,
+                beforeListTable: [
+                  ...(defaultCollection.admin?.components?.beforeListTable ?? []),
+                  '@/modules/payments/admin/CodQueues#CodQueues',
+                ],
+              },
+            },
+            access: {
+              ...defaultCollection.access,
+              create: () => false,
+              delete: () => false,
+              read: (args) => hasRole(args.req.user, ['super_admin', 'operations', 'finance'])
+                || defaultCollection.access?.read?.(args) || false,
+            },
+            endpoints: [
+              ...(defaultCollection.endpoints || []),
+              { path: '/:id/lifecycle', method: 'get', handler: getOrderLifecycleEndpoint },
+              { path: '/:id/lifecycle', method: 'post', handler: postOrderLifecycle },
+            ],
             fields: [
               ...defaultCollection.fields,
+              {
+                name: 'orderLifecycleControls',
+                type: 'ui',
+                admin: {
+                  position: 'sidebar',
+                  components: { Field: '@/modules/orders/admin/OrderLifecycleControls#OrderLifecycleControls' },
+                },
+              },
+              {
+                name: 'codOrderControls',
+                type: 'ui',
+                admin: {
+                  position: 'sidebar',
+                  components: { Field: '@/modules/payments/admin/CodOrderControls#CodOrderControls' },
+                },
+              },
               {
                 name: 'orderNumber',
                 type: 'text',
@@ -387,7 +495,7 @@ export default buildConfig({
                   { label: 'Not Applicable', value: 'not_applicable' },
                   { label: 'Pending Cash Collection', value: 'pending_collection' },
                   { label: 'Collected by Courier', value: 'collected_by_courier' },
-                  { label: 'Remitted to MWHEBA Bank', value: 'remitted_to_company' },
+                  { label: 'Cash in Company Custody', value: 'remitted_to_company' },
                 ],
                 admin: {
                   position: 'sidebar',
@@ -499,6 +607,7 @@ export default buildConfig({
               {
                 name: 'auditLog',
                 type: 'array',
+                access: { read: ({ req }) => hasRole(req.user, ['super_admin', 'operations', 'finance']) },
                 fields: [
                   {
                     name: 'entry',
@@ -506,6 +615,7 @@ export default buildConfig({
                   },
                 ],
                 admin: {
+                  readOnly: true,
                   description: 'Server-recorded append-only audit trail of financial and fulfillment status changes.',
                 },
               },
@@ -542,6 +652,46 @@ export default buildConfig({
                   // DEFENSE 0: PAYMENT METHOD IMMUTABILITY
                   // Once an order is created, mutating paymentMethod is strictly prohibited!
                   if (operation === 'update' && originalDoc) {
+                    const codCollectionEngine = Boolean(context?.isCodCollectionEngine || req.context?.isCodCollectionEngine);
+                    const codRemittanceEngine = Boolean(context?.isCourierRemittanceEngine || req.context?.isCourierRemittanceEngine);
+                    if (!codCollectionEngine && !codRemittanceEngine && data.auditLog !== undefined
+                      && JSON.stringify(codAuditEntries(data.auditLog)) !== JSON.stringify(codAuditEntries(originalDoc.auditLog))) {
+                      throw new APIError('COD_SETTLEMENT_ENGINE_ONLY: Cash settlement audit entries are managed by the settlement workflow.', 409);
+                    }
+                    if (originalDoc.paymentMethod === 'cod') {
+                      const changed = (field: string) => data[field] !== undefined
+                        && (data[field] ?? null) !== (originalDoc[field] ?? null);
+                      const changedDetail = (field: string) =>
+                        (data.codDetails === null || data.codDetails?.[field] !== undefined)
+                        && (data.codDetails?.[field] ?? null) !== (originalDoc.codDetails?.[field] ?? null);
+                      const changesCollection = ['requiredAmount', 'collectedAmount', 'collectorType', 'collectorName',
+                        'collectedAt', 'collectionReference'].some(changedDetail)
+                        || ['paidAt', 'reconciliationReference'].some(changed)
+                        || (data.paymentStatus !== 'paid' && changed('paymentStatus'));
+                      const changesRemittance = changedDetail('courierRemittanceBatchId')
+                        || (!codCollectionEngine && changed('remittanceStatus'));
+                      if ((!codCollectionEngine && changesCollection) || (!codRemittanceEngine && changesRemittance)) {
+                        throw new APIError('COD_SETTLEMENT_ENGINE_ONLY: Use the cash collection or courier remittance workflow.', 409);
+                      }
+                    }
+                    const lifecycleEngine = Boolean(context?.orderLifecycleEngine || req.context?.orderLifecycleEngine);
+                    if (!lifecycleEngine) {
+                      const changesTerminal = ['status', 'orderStatus', 'fulfillmentStatus'].some((field) =>
+                        data[field] !== undefined && data[field] !== originalDoc[field]
+                        && ['cancelled', 'returned_to_origin'].some((status) =>
+                          data[field] === status || originalDoc[field] === status),
+                      );
+                      const changesRefusal = ['refusalReason', 'refusalRecordedAt'].some((field) => (
+                        (data.codDetails === null || data.codDetails?.[field] !== undefined)
+                          && (data.codDetails?.[field] ?? null) !== (originalDoc.codDetails?.[field] ?? null)
+                      ));
+                      const changesAudit = data.auditLog !== undefined
+                        && JSON.stringify(lifecycleAuditEntries(data.auditLog)) !== JSON.stringify(lifecycleAuditEntries(originalDoc.auditLog));
+                      if (changesTerminal || changesRefusal || changesAudit) {
+                        throw new APIError('ORDER_LIFECYCLE_ENGINE_ONLY: Use the order cancellation, refusal, or return inspection workflow.', 409);
+                      }
+                    }
+
                     if (data.paymentMethod && originalDoc.paymentMethod && data.paymentMethod !== originalDoc.paymentMethod) {
                       throw new Error(
                         `PAYMENT_METHOD_IMMUTABLE: Modifying paymentMethod on an existing order from '${originalDoc.paymentMethod}' to '${data.paymentMethod}' is strictly prohibited. The customer must place a new order if they wish to change payment methods.`
@@ -669,7 +819,7 @@ export default buildConfig({
                       if (method === 'cod') {
                         const isAuthorizedCod = Boolean(context?.isCodCollectionEngine || req?.context?.isCodCollectionEngine);
                         const hasCollectionRef = Boolean(data.codDetails?.collectionReference);
-                        if (!isAuthorizedCod || !hasCollectionRef) {
+                        if (!isAuthorizedCod || !hasCollectionRef || !req.transactionID) {
                           throw new Error(
                             'DIRECT_COD_PAYMENT_STATUS_MUTATION_FORBIDDEN: Direct manual transition of a COD order to paid is strictly prohibited. COD payments can only be marked as paid through the authorized recordCodCollection pipeline within an active transaction and with an immutable collection receipt.'
                           );
@@ -754,6 +904,18 @@ export default buildConfig({
                     if (data.shippingFee !== undefined) {
                       data.shippingFee = originalDoc.shippingFee;
                     }
+                    if (data.deliveryMethod !== undefined) {
+                      data.deliveryMethod = originalDoc.deliveryMethod;
+                    }
+                    if (data.shippingAddress !== undefined) {
+                      data.shippingAddress = originalDoc.shippingAddress;
+                    }
+                    if (data.appliedTariff !== undefined) {
+                      data.appliedTariff = originalDoc.appliedTariff;
+                    }
+                    for (const field of ['orderNumber', 'cart', 'idempotencyKey', 'currency', 'appliedProductionPolicy', 'customer', 'customerEmail']) {
+                      if (data[field] !== undefined) data[field] = originalDoc[field];
+                    }
                     if (data.taxAmount !== undefined) {
                       data.taxAmount = originalDoc.taxAmount;
                     }
@@ -770,9 +932,11 @@ export default buildConfig({
                     const curShip = Number(data.shippingFee ?? originalDoc.shippingFee ?? 0);
                     const curTax = Number(data.taxAmount ?? originalDoc.taxAmount ?? 0);
                     const curComputedTotal = curSub + curFees + curShip + curTax;
-                    const curExpectedPiastres = toIntegerPiastres(curComputedTotal, 'Order ledger total');
-
-                    data.grandTotalPiastres = curExpectedPiastres;
+                    data.grandTotalPiastres = originalDoc.paymentMethod === 'cod'
+                      ? originalDoc.grandTotalPiastres ?? toIntegerPiastres(
+                        Number(originalDoc.amount ?? originalDoc.total), 'Frozen COD order total',
+                      )
+                      : toIntegerPiastres(curComputedTotal, 'Order ledger total');
                     return data;
                   }
 
@@ -793,36 +957,35 @@ export default buildConfig({
                       const product = await req.payload.findByID({
                         collection: 'products',
                         id: prodId,
+                        depth: 0,
+                        joins: false,
+                        draft: false,
+                        disableErrors: true,
                         req,
                       });
-                      if (!product) throw new Error(`Product not found: ${prodId}`);
                       productMap.set(prodId, product);
                     }
 
-                    if (item.variant) {
-                      const varId = typeof item.variant === 'object' && item.variant !== null ? item.variant.id : item.variant;
-                      if (!variantMap.has(varId)) {
-                        const variant = await req.payload.findByID({
-                          collection: 'variants',
-                          id: varId,
-                          req,
-                        });
-                        if (!variant) throw new Error(`Variant not found: ${varId}`);
-                        variantMap.set(varId, variant);
-                      }
-
-                      // DEFENSE 2: Verify variant strictly belongs to item.product (Issue 2)
-                      const variantDoc = variantMap.get(varId);
-                      const variantParentProdId =
-                        typeof variantDoc.product === 'object' && variantDoc.product !== null
-                          ? variantDoc.product.id
-                          : variantDoc.product;
-
-                      if (String(variantParentProdId) !== String(prodId)) {
-                        throw new Error(
-                          `Variant Mismatch Error: Variant "${variantDoc.title || varId}" (ID: ${varId}) belongs to Product ID ${variantParentProdId}, but was attached to Product ID ${prodId}. Cross-product variant assignment is strictly prohibited.`
-                        );
-                      }
+                    const varId = typeof item.variant === 'object' && item.variant !== null ? item.variant.id : item.variant ?? undefined;
+                    if (varId !== undefined && !variantMap.has(varId)) {
+                      const variant = await req.payload.findByID({
+                        collection: 'variants',
+                        id: varId,
+                        depth: 0,
+                        draft: false,
+                        disableErrors: true,
+                        req,
+                      });
+                      variantMap.set(varId, variant);
+                    }
+                    const selectionError = catalogSelectionError(
+                      productMap.get(prodId),
+                      varId,
+                      varId === undefined ? undefined : variantMap.get(varId),
+                      Boolean(item.artworkAssetId),
+                    );
+                    if (selectionError) {
+                      throw new APIError(selectionError, 422, undefined, true);
                     }
                   }
 
@@ -869,20 +1032,12 @@ export default buildConfig({
 
                   // 4b. COD Scope & Validation Rules at Order Creation Hook (D-021, D-022)
                   if (data.paymentMethod === 'cod') {
-                    const hasPhysical = data.items.some((item: any) => {
+                    const eligibility = validateCodEligibility(data.items.map((item: any) => {
                       const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-                      return productMap.get(prodId)?.itemType === 'physical';
-                    });
-                    const hasService = data.items.some((item: any) => {
-                      const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
-                      return productMap.get(prodId)?.itemType === 'service';
-                    });
-
-                    if (hasService && !hasPhysical) {
-                      throw new Error('COD_PROHIBITED_FOR_DIGITAL: Cash on Delivery is strictly prohibited for service packages and digital deliverables.');
-                    }
-                    if (hasService && hasPhysical) {
-                      throw new Error('COD_PROHIBITED_FOR_MIXED_CART: Mixed carts containing digital services cannot use Cash on Delivery. Please use Bank Transfer or checkout separately.');
+                      return { itemType: productMap.get(prodId)?.itemType };
+                    }));
+                    if (!eligibility.eligible) {
+                      throw new APIError(`${eligibility.code}: ${eligibility.message}`, 422);
                     }
 
                     // Enforce server-authoritative initial states for COD
@@ -898,69 +1053,47 @@ export default buildConfig({
                   const hasCustomization = data.items.some((item: any) => lineHasCustomization(item));
                   data.proofStatus = hasCustomization ? 'proof_pending' : 'not_required';
 
-                  // 5. DEFENSE 2: Resolve prices from Variant priceInEGP or Product priceInEGP (Issue 2)
-                  let calculatedSubtotal = 0;
-                  let calculatedCustomizationTotal = 0;
-                  let calculatedAmount = 0;
-
-                  for (const item of data.items) {
+                  // 5. Freeze the current catalog price and SKU for each line.
+                  const pricedLines = data.items.map((item: any) => {
                     const prodId = typeof item.product === 'object' && item.product !== null ? item.product.id : item.product;
                     const prod = productMap.get(prodId);
 
-                    let unitPrice = 0;
-                    let variantDoc: any = undefined;
-                    // Check variant pricing first
-                    if (item.variant) {
-                      const varId = typeof item.variant === 'object' && item.variant !== null ? item.variant.id : item.variant;
-                      variantDoc = variantMap.get(varId);
-                      if (variantDoc) {
-                        if (typeof variantDoc.priceInEGP === 'number') {
-                          unitPrice = variantDoc.priceInEGP;
-                        }
-                      }
-                    }
-                    // Fallback to product-level priceInEGP or basePrice
-                    if (unitPrice === 0) {
-                      if (typeof prod.priceInEGP === 'number') {
-                        unitPrice = prod.priceInEGP;
-                      } else if (typeof prod.basePrice === 'number') {
-                        unitPrice = prod.basePrice;
-                      }
-                    }
+                    const varId = typeof item.variant === 'object' && item.variant !== null ? item.variant.id : item.variant;
+                    const variantDoc = varId ? variantMap.get(varId) : undefined;
+                    const unitPrice = resolveCatalogUnitPrice(prod, variantDoc) ?? 0;
 
                     const qty = Number(item.quantity) || 1;
                     const feePerUnit = customizationFeePerUnit(item, prod);
-                    const lineCustomization = feePerUnit * qty;
-                    const lineBase = unitPrice * qty;
-                    const lineTotal = lineBase + lineCustomization;
+                    const linePrice = priceCheckoutLine(unitPrice, feePerUnit, qty);
 
                     // Freeze values onto the persisted line item
                     item.productTitle = prod.title || '';
                     item.variantTitle = variantDoc?.title || '';
-                    item.sku = variantDoc?.sku || prod.sku || '';
+                    item.sku = resolveCatalogSku(prod, variantDoc) ?? '';
                     item.unitPrice = unitPrice;
                     item.customizationFee = feePerUnit;
-                    item.lineTotal = lineTotal;
+                    item.lineTotal = linePrice.lineTotal;
                     item.fulfillmentType = prod.itemType || 'physical';
 
-                    calculatedSubtotal += lineBase;
-                    calculatedCustomizationTotal += lineCustomization;
-                    calculatedAmount += lineTotal;
-                  }
+                    return linePrice;
+                  });
 
-                  const shippingFee = Number(data.shippingFee || data.fulfillment?.shippingFee || 0);
+                  const shippingFee = Number(data.shippingFee ?? data.fulfillment?.shippingFee ?? 0);
                   const taxAmount = Number(data.taxAmount || 0);
-                  const grandTotal = calculatedAmount + shippingFee + taxAmount;
-                  data.subtotal = calculatedSubtotal;
-                  data.totalCustomizationFees = calculatedCustomizationTotal;
-                  data.shippingFee = shippingFee;
-                  data.taxAmount = taxAmount;
+                  const amounts = calculateCheckoutAmounts(pricedLines, shippingFee, taxAmount);
+                  if (amounts.grandTotalPiastres <= 0) {
+                    throw new Error('INVALID_MONETARY_AMOUNT: Order grand total must be greater than zero.');
+                  }
+                  data.subtotal = amounts.subtotal;
+                  data.totalCustomizationFees = amounts.totalCustomizationFees;
+                  data.shippingFee = amounts.shippingFee;
+                  data.taxAmount = amounts.taxAmount;
                   data.taxReviewStatus = data.taxReviewStatus || 'pending_accountant_review';
-                  data.amount = grandTotal;
-                  data.total = grandTotal;
-                  data.grandTotalPiastres = toIntegerPiastres(grandTotal, 'Order grand total');
+                  data.amount = amounts.grandTotal;
+                  data.total = amounts.grandTotal;
+                  data.grandTotalPiastres = amounts.grandTotalPiastres;
 
-                  if (data.deliveryMethod === 'pickup') {
+                  if (data.deliveryMethod === 'pickup' && !data.appliedTariff?.configurationReference) {
                     if (!data.fulfillmentNotes || !data.fulfillmentNotes.includes('Office Pickup')) {
                       data.fulfillmentNotes = data.fulfillmentNotes ? `${data.fulfillmentNotes} (Office Pickup)` : 'Office Pickup';
                     }
@@ -994,7 +1127,7 @@ export default buildConfig({
                   if (!data.auditLog || data.auditLog.length === 0) {
                     data.auditLog = [
                       {
-                        entry: `Order created in pending state. Frozen total: ${calculatedAmount} EGP.`,
+                        entry: `Order created in pending state. Frozen total: ${amounts.grandTotal} EGP.`,
                       },
                     ];
                   }

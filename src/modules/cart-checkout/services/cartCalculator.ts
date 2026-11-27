@@ -1,4 +1,9 @@
-import type { Payload } from 'payload';
+import type { Payload, PayloadRequest } from 'payload';
+import type { Product, Variant } from '@/payload-types';
+import { defaultLocale, type Locale } from '@/shared/lib/i18n';
+import { resolveCatalogSku, resolveCatalogUnitPrice } from '@/modules/catalog/services/catalogPrice';
+import { catalogLocale, catalogProductTitle, catalogSelectionError, isPublishedCatalogItem } from '@/modules/catalog/services/catalogProduct';
+import { checkInventoryAvailability, inventoryIssueMessage, type InventoryIssue } from '@/modules/inventory/services/inventoryService';
 import { customizationFeePerUnit } from '../logic/customizationFee';
 
 export interface HydratedCartItem {
@@ -12,6 +17,9 @@ export interface HydratedCartItem {
   basePrice: number;
   variantId?: number;
   variantTitle?: string;
+  sku?: string;
+  availabilityError?: string;
+  stockIssue?: InventoryIssue;
   unitPrice: number;
   quantity: number;
   customizationFeePerUnit: number;
@@ -54,7 +62,7 @@ export interface CartCalculationSummary {
 
 /**
  * Calculates cart state from fully hydrated cart items.
- * Strictly adheres to DECISIONS.md D-009, D-010, D-017, D-018:
+ * Applies DECISIONS.md D-009, D-010, D-017, and D-018.
  * - Aggregates quantities strictly per Product ID across variants.
  * - Rejects pooling / merging across different Product IDs.
  * - Customization fees itemized as separate financial line charges.
@@ -68,6 +76,7 @@ export function calculateCartSummary(
   let totalCustomizationFees = 0;
   let totalItemsCount = 0;
   const validationErrors: string[] = [];
+  const reportedStock = new Set<string>();
 
   // 1. Group line items by Product ID and accumulate financials
   for (const item of items) {
@@ -75,6 +84,18 @@ export function calculateCartSummary(
     totalItemsCount += item.quantity;
     subtotal += item.lineSubtotal;
     totalCustomizationFees += item.lineCustomizationFee;
+    if (item.availabilityError) {
+      validationErrors.push(item.availabilityError);
+      continue;
+    }
+    if (item.stockIssue) {
+      const stockKey = item.variantId == null ? `product:${item.productId}` : `variant:${item.variantId}`;
+      if (!reportedStock.has(stockKey)) {
+        reportedStock.add(stockKey);
+        const label = item.variantTitle ? `${item.productTitle} (${item.variantTitle})` : item.productTitle;
+        validationErrors.push(inventoryIssueMessage(item.stockIssue, label));
+      }
+    }
 
     if (!productGroupings[pId]) {
       productGroupings[pId] = {
@@ -100,7 +121,7 @@ export function calculateCartSummary(
   }
 
   // 2. Evaluate MOQ strictly per Product ID (No cross-product aggregation)
-  let canCheckout = items.length > 0;
+  let canCheckout = items.length > 0 && validationErrors.length === 0;
 
   if (items.length === 0) {
     canCheckout = false;
@@ -142,87 +163,82 @@ export function calculateCartSummary(
  */
 export async function hydrateCartLines(
   rawItems: any[],
-  payload: Payload
+  payload: Payload,
+  locale: Locale = defaultLocale,
+  req?: Partial<PayloadRequest>,
 ): Promise<HydratedCartItem[]> {
   if (!rawItems || rawItems.length === 0) return [];
 
-  const productCache = new Map<number, any>();
-  const variantCache = new Map<number, any>();
+  const productCache = new Map<number, Product | null>();
+  const variantCache = new Map<number, Variant | null>();
 
   const hydratedItems: HydratedCartItem[] = [];
 
   for (const raw of rawItems) {
     const rawProdId = typeof raw.product === 'object' && raw.product !== null ? raw.product.id : raw.product;
-    const prodId = Number(rawProdId);
-    if (!Number.isSafeInteger(prodId) || prodId <= 0) continue;
+    const numericId = Number(rawProdId);
+    const prodId = Number.isSafeInteger(numericId) && numericId > 0 ? numericId : 0;
 
     // Fetch product
-    let product = productCache.get(prodId);
-    if (!product) {
-      try {
-        product = await payload.findByID({
-          collection: 'products',
-          id: prodId,
-          depth: 0,
-        });
-        if (product) productCache.set(prodId, product);
-      } catch {
-        continue;
-      }
+    if (prodId && !productCache.has(prodId)) {
+      const product = await payload.findByID({
+        collection: 'products',
+        id: prodId,
+        depth: 0,
+        joins: false,
+        draft: false,
+        disableErrors: true,
+        req,
+        ...catalogLocale(locale),
+      });
+      productCache.set(prodId, isPublishedCatalogItem(product) ? product : null);
     }
-    if (!product) continue;
+    const product = productCache.get(prodId);
 
     // Fetch variant if present
-    let variant: any = null;
     const rawVarId = typeof raw.variant === 'object' && raw.variant !== null ? raw.variant.id : raw.variant;
     const varId = rawVarId ? Number(rawVarId) : undefined;
-    if (varId && Number.isSafeInteger(varId) && varId > 0) {
-      variant = variantCache.get(varId);
-      if (!variant) {
-        try {
-          variant = await payload.findByID({
-            collection: 'variants',
-            id: varId,
-            depth: 0,
-          });
-          if (variant) variantCache.set(varId, variant);
-        } catch {
-          // Variant missing
-        }
-      }
+    if (varId && Number.isSafeInteger(varId) && varId > 0 && !variantCache.has(varId)) {
+      const variant = await payload.findByID({
+        collection: 'variants',
+        id: varId,
+        depth: 0,
+        draft: false,
+        disableErrors: true,
+        req,
+      });
+      variantCache.set(varId, variant);
     }
+    const variant = varId ? variantCache.get(varId) : undefined;
 
-    const qty = Math.max(1, Number(raw.quantity) || 1);
-
-    // Resolve unit price: variant price first, then product basePrice
-    let unitPrice = 0;
-    if (variant && typeof variant.priceInEGP === 'number') {
-      unitPrice = variant.priceInEGP;
-    } else if (typeof product.priceInEGP === 'number') {
-      unitPrice = product.priceInEGP;
-    } else if (typeof product.basePrice === 'number') {
-      unitPrice = product.basePrice;
-    }
+    const qty = Number(raw.quantity);
+    const validQuantity = Number.isSafeInteger(qty) && qty > 0;
+    const availabilityError = catalogSelectionError(product, varId, variant, Boolean(raw.artworkAssetId))
+      ?? (validQuantity ? null : 'INVALID_QUANTITY: Quantity must be a positive whole integer.');
+    const unitPrice = !availabilityError && product ? resolveCatalogUnitPrice(product, variant) ?? 0 : 0;
 
     // Separate customization fee
-    const feePerUnit = customizationFeePerUnit(raw, product);
-    const lineCustomizationFee = feePerUnit * qty;
-    const lineSubtotal = unitPrice * qty;
+    const feePerUnit = !availabilityError && product ? customizationFeePerUnit(raw, product) : 0;
+    const quantity = validQuantity ? qty : 0;
+    const lineCustomizationFee = feePerUnit * quantity;
+    const lineSubtotal = unitPrice * quantity;
     const lineTotal = lineSubtotal + lineCustomizationFee;
 
     hydratedItems.push({
       id: String(raw.id || `line-${prodId}-${varId || 0}`),
       productId: prodId,
-      productTitle: String(product.title || 'Product'),
-      productSlug: String(product.slug || ''),
-      productType: product.productType === 'fixed_service' ? 'fixed_service' : 'physical',
-      itemType: product.itemType === 'service' ? 'service' : 'physical',
-      minOrderQuantity: Number(product.minOrderQuantity) || (product.productType === 'fixed_service' ? 1 : 10),
-      basePrice: Number(product.basePrice) || 0,
+      productTitle: product ? catalogProductTitle(product) : 'Product',
+      productSlug: product?.slug ?? '',
+      productType: product?.productType === 'fixed_service' ? 'fixed_service' : 'physical',
+      itemType: product?.itemType === 'service' ? 'service' : 'physical',
+      minOrderQuantity: product?.minOrderQuantity ?? (product?.productType === 'fixed_service' ? 1 : 10),
+      basePrice: product?.basePrice ?? 0,
       variantId: varId,
-      variantTitle: variant?.title ? String(variant.title) : undefined,
+      variantTitle: !availabilityError && variant?.title ? variant.title : undefined,
+      sku: !availabilityError && product ? resolveCatalogSku(product, variant) ?? undefined : undefined,
+      availabilityError: availabilityError ?? undefined,
       unitPrice,
-      quantity: qty,
+      quantity,
       customizationFeePerUnit: feePerUnit,
       lineCustomizationFee,
       lineSubtotal,
@@ -232,7 +248,7 @@ export async function hydrateCartLines(
     });
   }
 
-  return hydratedItems;
+  return checkInventoryAvailability(payload, hydratedItems, req);
 }
 
 /**
@@ -241,12 +257,14 @@ export async function hydrateCartLines(
  */
 export function assertCartCanCheckout(summary: CartCalculationSummary): void {
   if (!summary.canCheckout || summary.validationErrors.length > 0) {
+    const stockCode = summary.items.find((item) => item.stockIssue)?.stockIssue?.code;
+    const code = stockCode ?? 'CHECKOUT_MOQ_VIOLATION';
     const error: any = new Error(
-      `CHECKOUT_MOQ_VIOLATION: ${summary.validationErrors.join('; ')}`
+      `${code}: ${summary.validationErrors.join('; ')}`
     );
     error.status = 422;
     error.statusCode = 422;
-    error.code = 'CHECKOUT_MOQ_VIOLATION';
+    error.code = code;
     error.validationErrors = summary.validationErrors;
     error.productGroupings = summary.productGroupings;
     throw error;

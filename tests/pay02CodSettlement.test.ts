@@ -1,7 +1,9 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -13,6 +15,7 @@ import {
 import { POST as collectRoute } from '@/app/api/payments/cod/collect/route';
 import { POST as remitRoute } from '@/app/api/payments/cod/remit/route';
 import { POST as refuseRoute } from '@/app/api/payments/cod/refuse/route';
+import { transitionJob } from '@/modules/fulfillment/services/fulfillmentService';
 
 describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', () => {
   let payload: any;
@@ -53,7 +56,9 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
     });
 
   // Helper to place a real COD order
-  const createTestCodOrder = async (companyName = 'Test Company', city = 'Cairo') => {
+  const createTestCodOrder = async (fulfillment: 'delivered' | 'shipped' | 'ready_for_pickup' = 'delivered') => {
+    const method = fulfillment === 'ready_for_pickup' ? 'pickup' : 'shipping';
+    const city = 'Cairo';
     const cart = await getOrCreateCart(payload);
     cleanup.carts.push(cart.id);
     await payload.update({
@@ -62,7 +67,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
       data: { items: [{ product: physicalProduct.id, quantity: 10 }] },
     });
 
-    const quote = await buildCheckoutQuote(payload, cart.id, { method: 'shipping', governorate: city });
+    const quote = await buildCheckoutQuote(payload, cart.id, { method, governorate: city });
     const email = `cod_buyer_${unique()}@mwheba.test`;
 
     const result = await createOrderFromCart(payload, {
@@ -71,19 +76,29 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
       customer: {
         email,
         password: 'Password2026!',
-        companyName,
+        companyName: 'Test Company',
         contactPerson: 'Purchasing Manager',
         phone: '+201011223344',
       },
       delivery: {
-        method: 'shipping',
+        method,
+        ...confirmedTestDelivery(quote),
         shippingAddress: { governorate: city, city, streetAddress: '100 Nile St' },
         expectedShippingFee: quote.shippingFee,
       },
       paymentMethod: 'cod',
       expectedGrandTotal: quote.grandTotal,
+      expectedQuoteConfirmation: quote.confirmation,
       idempotencyKey: `idemp_${unique()}`,
     });
+
+    const { docs: [job] } = await payload.find({
+      collection: 'fulfillment-jobs', where: { order: { equals: result.order.id } }, depth: 0,
+    });
+    await transitionJob(payload, { jobId: job.id, to: 'in_printing', user: opsUser });
+    await transitionJob(payload, { jobId: job.id, to: 'quality_check', user: opsUser });
+    await transitionJob(payload, { jobId: job.id, to: method === 'pickup' ? 'ready_for_pickup' : 'shipped', user: opsUser });
+    if (fulfillment === 'delivered') await transitionJob(payload, { jobId: job.id, to: 'delivered', user: opsUser });
 
     const order = await payload.findByID({
       collection: 'orders',
@@ -94,8 +109,10 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
     return order;
   };
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, { courierRemittanceEnabled: true });
 
     // 1. Create Staff Users
     const password = 'Password2026!';
@@ -136,6 +153,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
     physicalProduct = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY02-MUG',
         title: 'PAY-02 Stainless Steel Thermal Mug',
         slug: `pay02-mug-${unique()}`,
         itemType: 'physical',
@@ -145,10 +163,12 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProduct.id);
     cleanup.products.push(physicalProduct.id);
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     const del = async (collection: string, id: any, context?: any) => {
       try {
         await payload.delete({ collection, id, context });
@@ -256,7 +276,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
     });
 
     it('records cash collection by office staff: sets remittanceStatus = remitted_to_company', async () => {
-      const order = await createTestCodOrder();
+      const order = await createTestCodOrder('ready_for_pickup');
       const receipt = `REC_OFFICE_${unique()}`;
 
       const res = await recordCodCollection(payload, {
@@ -380,7 +400,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
   // 2. Concurrency & Race Condition Defense
   // ===========================================================================
   describe('2. Concurrency & Race Condition Defense', () => {
-    it('serializes 5 concurrent simultaneous collection submissions for the same order: exactly 1 records collection, 4 return ALREADY_COLLECTED/ALREADY_PAID', async () => {
+    it('serializes five concurrent submissions into one collection and four exact replays', async () => {
       const order = await createTestCodOrder();
       const receipt = `REC_CONCURRENT_${unique()}`;
 
@@ -398,9 +418,8 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
 
       const results = await Promise.all(promises);
 
-      // Exactly 1 must have COLLECTION_RECORDED, and the other 4 must have ALREADY_COLLECTED (or ALREADY_PAID)
       const recordedCount = results.filter((r) => r.status === 'COLLECTION_RECORDED').length;
-      const alreadyCollectedCount = results.filter((r) => r.status === 'ALREADY_COLLECTED' || r.status === 'ALREADY_PAID').length;
+      const alreadyCollectedCount = results.filter((r) => r.status === 'ALREADY_COLLECTED').length;
 
       expect(recordedCount).toBe(1);
       expect(alreadyCollectedCount).toBe(4);
@@ -426,7 +445,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
   // ===========================================================================
   describe('3. Customer Delivery Refusal Handling', () => {
     it('records customer delivery refusal: sets orderStatus = cancelled, fulfillmentStatus = returned_to_origin, and paymentStatus strictly unpaid', async () => {
-      const order = await createTestCodOrder();
+      const order = await createTestCodOrder('shipped');
 
       const res = await recordDeliveryRefusal(payload, {
         orderId: order.id,
@@ -447,7 +466,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
     });
 
     it('blocks recording collection on a cancelled or returned/refused order (422 CANNOT_COLLECT_CANCELLED_OR_REFUSED_ORDER)', async () => {
-      const order = await createTestCodOrder();
+      const order = await createTestCodOrder('shipped');
 
       await recordDeliveryRefusal(payload, {
         orderId: order.id,
@@ -839,7 +858,7 @@ describe('PAY-02: COD Collection Settlement, Idempotency & Courier Remittance', 
     });
 
     it('records delivery refusal via POST /api/payments/cod/refuse with JWT auth', async () => {
-      const order = await createTestCodOrder();
+      const order = await createTestCodOrder('shipped');
 
       const refuseReq = asReq('http://localhost:3000/api/payments/cod/refuse', opsToken, {
         orderId: order.id,

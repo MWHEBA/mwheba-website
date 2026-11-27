@@ -1,6 +1,8 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { getPayload } from 'payload';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import {
   getOrCreateCart,
   addItemToCart,
@@ -45,8 +47,10 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
 
   const unique = () => `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload, { bankTransfer: true });
 
     // Seed test customer user
     testUser = await payload.create({
@@ -129,6 +133,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
     variantRed = await payload.create({
       collection: 'variants',
       data: {
+        sku: 'REL01-RED',
         title: 'كوب حراري - أحمر قرمزي',
         product: physicalProductA.id,
         options: [redOption.id],
@@ -136,11 +141,13 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'variant', variantRed.id);
     cleanupVariantIds.push(variantRed.id);
 
     variantBlue = await payload.create({
       collection: 'variants',
       data: {
+        sku: 'REL01-BLUE',
         title: 'كوب حراري - أزرق سماوي',
         product: physicalProductA.id,
         options: [blueOption.id],
@@ -148,12 +155,14 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'variant', variantBlue.id);
     cleanupVariantIds.push(variantBlue.id);
 
     // Physical Product B (Leather Notebook, MOQ 10)
     physicalProductB = await payload.create({
       collection: 'products',
       data: {
+        sku: 'REL01-NOTEBOOK',
         title: 'دفتر جلدي فاخر (Product B)',
         slug: `notebook-b-${unique()}`,
         productType: 'physical',
@@ -165,6 +174,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProductB.id);
     cleanupProductIds.push(physicalProductB.id);
 
     // Digital Service Product (Brand Guidelines, MOQ 1)
@@ -186,6 +196,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     for (const orderId of cleanupOrderIds) {
       try {
         await payload.delete({ collection: 'orders', id: orderId });
@@ -312,6 +323,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
           cartId: cart.id,
           guestSecret: cart.secret,
           expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
           customer: {
             email: `guest_${unique()}@test.com`,
             password: 'StrongPassword123!',
@@ -321,6 +333,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
           },
           delivery: {
             method: 'shipping',
+            ...confirmedTestDelivery(quote),
             shippingAddress: {
               governorate: 'Cairo',
               city: 'Nasr City',
@@ -369,6 +382,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
           cartId: cart.id,
           guestSecret: cart.secret,
           expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
           customer: {
             email: `guest_${unique()}@test.com`,
             password: 'StrongPassword123!',
@@ -378,6 +392,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
           },
           delivery: {
             method: 'shipping',
+            ...confirmedTestDelivery(quote),
             shippingAddress: {
               governorate: 'Cairo',
               city: 'Nasr City',
@@ -420,6 +435,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         cartId: cart.id,
         guestSecret: cart.secret,
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
         customer: {
           email: `guest_${unique()}@test.com`,
           password: 'StrongPassword123!',
@@ -429,6 +445,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         },
         delivery: {
           method: 'shipping',
+          ...confirmedTestDelivery(quote),
           shippingAddress: {
             governorate: 'Cairo',
             city: 'Maadi',
@@ -480,6 +497,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         cartId: cart.id,
         guestSecret: cart.secret,
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
         customer: {
           email: testUser.email,
           companyName: 'Ahmed Mahmoud Company',
@@ -488,6 +506,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         },
         delivery: {
           method: 'pickup',
+          ...confirmedTestDelivery(quote),
         },
         paymentMethod: 'bank_transfer',
         user: {
@@ -573,12 +592,14 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
         operationKey: generateOperationKey('add'),
       });
 
+      const quote = await buildCheckoutQuote(payload, cart.id, { method: 'pickup' });
       // Attempt to place order with tampered expectedGrandTotal (10 EGP instead of quote)
       await expect(
         createOrderFromCart(payload, {
           cartId: cart.id,
           guestSecret: cart.secret,
           expectedGrandTotal: 10,
+          expectedQuoteConfirmation: quote.confirmation,
           customer: {
             email: `guest_${unique()}@test.com`,
             password: 'StrongPassword123!',
@@ -588,6 +609,7 @@ describe('REL-01: End-to-End Acceptance Test Automation', () => {
           },
           delivery: {
             method: 'pickup',
+            ...confirmedTestDelivery(quote),
           },
           paymentMethod: 'bank_transfer',
         })

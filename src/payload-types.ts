@@ -79,6 +79,7 @@ export interface Config {
     inquiries: Inquiry;
     'rate-limit-events': RateLimitEvent;
     categories: Category;
+    'product-tags': ProductTag;
     media: Media;
     'artwork-assets': ArtworkAsset;
     'bank-transfers': BankTransfer;
@@ -117,6 +118,7 @@ export interface Config {
     inquiries: InquiriesSelect<false> | InquiriesSelect<true>;
     'rate-limit-events': RateLimitEventsSelect<false> | RateLimitEventsSelect<true>;
     categories: CategoriesSelect<false> | CategoriesSelect<true>;
+    'product-tags': ProductTagsSelect<false> | ProductTagsSelect<true>;
     media: MediaSelect<false> | MediaSelect<true>;
     'artwork-assets': ArtworkAssetsSelect<false> | ArtworkAssetsSelect<true>;
     'bank-transfers': BankTransfersSelect<false> | BankTransfersSelect<true>;
@@ -212,6 +214,7 @@ export interface User {
    * Egyptian Tax Registration Number (الرقم الضريبي)
    */
   taxId?: string | null;
+  defaultAddress?: (number | null) | Address;
   roles: (
     'super_admin' | 'marketer' | 'catalog_manager' | 'operations' | 'creative_director' | 'finance' | 'customer'
   )[];
@@ -234,6 +237,68 @@ export interface User {
     | null;
   password?: string | null;
   collection: 'users';
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "addresses".
+ */
+export interface Address {
+  id: number;
+  customer?: (number | null) | User;
+  title?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  company?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  country:
+    | 'US'
+    | 'GB'
+    | 'CA'
+    | 'AU'
+    | 'AT'
+    | 'BE'
+    | 'BR'
+    | 'BG'
+    | 'CY'
+    | 'CZ'
+    | 'DK'
+    | 'EE'
+    | 'FI'
+    | 'FR'
+    | 'DE'
+    | 'GR'
+    | 'HK'
+    | 'HU'
+    | 'IN'
+    | 'IE'
+    | 'IT'
+    | 'JP'
+    | 'LV'
+    | 'LT'
+    | 'LU'
+    | 'MY'
+    | 'MT'
+    | 'MX'
+    | 'NL'
+    | 'NZ'
+    | 'NO'
+    | 'PL'
+    | 'PT'
+    | 'RO'
+    | 'SG'
+    | 'SK'
+    | 'SI'
+    | 'ES'
+    | 'SE'
+    | 'CH'
+    | 'EG';
+  phone?: string | null;
+  updatedAt: string;
+  createdAt: string;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -560,8 +625,33 @@ export interface RateLimitEvent {
 export interface Category {
   id: number;
   title: string;
+  /**
+   * Used in storefront links and set when the term is created.
+   */
   slug: string;
   description?: string | null;
+  /**
+   * Clear this to archive the term and hide it from storefront filters.
+   */
+  isActive?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "product-tags".
+ */
+export interface ProductTag {
+  id: number;
+  title: string;
+  /**
+   * Used in storefront links and set when the term is created.
+   */
+  slug: string;
+  /**
+   * Clear this to archive the term and hide it from storefront filters.
+   */
+  isActive?: boolean | null;
   updatedAt: string;
   createdAt: string;
 }
@@ -669,6 +759,22 @@ export interface Product {
   title: string;
   slug: string;
   /**
+   * Stock keeping unit. Use a distinct value across products and variants.
+   */
+  sku?: string | null;
+  /**
+   * Storefront name for the selected locale. Falls back to the product title.
+   */
+  storefrontTitle?: string | null;
+  /**
+   * Storefront description for the selected locale. Falls back to the product description.
+   */
+  storefrontDescription?: string | null;
+  /**
+   * Public catalog images shown on the storefront.
+   */
+  gallery?: (number | Media)[] | null;
+  /**
    * Base price in EGP for products without complex variant pricing.
    */
   basePrice?: number | null;
@@ -679,6 +785,7 @@ export interface Product {
   itemType?: ('physical' | 'service') | null;
   description?: string | null;
   category?: (number | null) | Category;
+  tags?: (number | ProductTag)[] | null;
   /**
    * Minimum order quantity enforced across all variants (D-009). Strictly 10 for physical, 1 for services.
    */
@@ -721,6 +828,11 @@ export interface Product {
     hasNextPage?: boolean;
     totalDocs?: number;
   };
+  priceInEGPEnabled?: boolean | null;
+  /**
+   * Unit price in EGP, e.g. 125.50.
+   */
+  priceInEGP?: number | null;
   updatedAt: string;
   createdAt: string;
   deletedAt?: string | null;
@@ -767,12 +879,19 @@ export interface VariantOption {
 export interface Variant {
   id: number;
   /**
+   * Stock keeping unit. Use a distinct value across products and variants.
+   */
+  sku?: string | null;
+  /**
    * Used for administrative purposes, not shown to customers. This is populated by default.
    */
   title?: string | null;
   product: number | Product;
   options: (number | VariantOption)[];
   priceInEGPEnabled?: boolean | null;
+  /**
+   * Unit price in EGP, e.g. 125.50.
+   */
   priceInEGP?: number | null;
   updatedAt: string;
   createdAt: string;
@@ -1132,7 +1251,7 @@ export interface PaymentCollection {
   createdAt: string;
 }
 /**
- * Reconciled courier cash collection remittance batches deposited into MWHEBA bank account.
+ * Reconciled courier cash collection remittance batches deposited into the company bank account.
  *
  * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "courier-remittances".
@@ -1160,7 +1279,7 @@ export interface CourierRemittance {
    */
   otherDeductions?: number | null;
   /**
-   * Actual net cash deposited into MWHEBA corporate bank account.
+   * Actual net cash deposited into the company bank account.
    */
   netDepositAmount: number;
   /**
@@ -1280,67 +1399,6 @@ export interface ServiceBrief {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "addresses".
- */
-export interface Address {
-  id: number;
-  customer?: (number | null) | User;
-  title?: string | null;
-  firstName?: string | null;
-  lastName?: string | null;
-  company?: string | null;
-  addressLine1?: string | null;
-  addressLine2?: string | null;
-  city?: string | null;
-  state?: string | null;
-  postalCode?: string | null;
-  country:
-    | 'US'
-    | 'GB'
-    | 'CA'
-    | 'AU'
-    | 'AT'
-    | 'BE'
-    | 'BR'
-    | 'BG'
-    | 'CY'
-    | 'CZ'
-    | 'DK'
-    | 'EE'
-    | 'FI'
-    | 'FR'
-    | 'DE'
-    | 'GR'
-    | 'HK'
-    | 'HU'
-    | 'IN'
-    | 'IE'
-    | 'IT'
-    | 'JP'
-    | 'LV'
-    | 'LT'
-    | 'LU'
-    | 'MY'
-    | 'MT'
-    | 'MX'
-    | 'NL'
-    | 'NZ'
-    | 'NO'
-    | 'PL'
-    | 'PT'
-    | 'RO'
-    | 'SG'
-    | 'SK'
-    | 'SI'
-    | 'ES'
-    | 'SE'
-    | 'CH';
-  phone?: string | null;
-  updatedAt: string;
-  createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -1390,6 +1448,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'categories';
         value: number | Category;
+      } | null)
+    | ({
+        relationTo: 'product-tags';
+        value: number | ProductTag;
       } | null)
     | ({
         relationTo: 'media';
@@ -1509,6 +1571,7 @@ export interface UsersSelect<T extends boolean = true> {
   name?: T;
   companyName?: T;
   taxId?: T;
+  defaultAddress?: T;
   roles?: T;
   updatedAt?: T;
   createdAt?: T;
@@ -1818,6 +1881,18 @@ export interface CategoriesSelect<T extends boolean = true> {
   title?: T;
   slug?: T;
   description?: T;
+  isActive?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "product-tags_select".
+ */
+export interface ProductTagsSelect<T extends boolean = true> {
+  title?: T;
+  slug?: T;
+  isActive?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -2021,6 +2096,7 @@ export interface AddressesSelect<T extends boolean = true> {
  * via the `definition` "variants_select".
  */
 export interface VariantsSelect<T extends boolean = true> {
+  sku?: T;
   title?: T;
   product?: T;
   options?: T;
@@ -2063,11 +2139,16 @@ export interface VariantOptionsSelect<T extends boolean = true> {
 export interface ProductsSelect<T extends boolean = true> {
   title?: T;
   slug?: T;
+  sku?: T;
+  storefrontTitle?: T;
+  storefrontDescription?: T;
+  gallery?: T;
   basePrice?: T;
   productType?: T;
   itemType?: T;
   description?: T;
   category?: T;
+  tags?: T;
   minOrderQuantity?: T;
   allowArtworkUpload?: T;
   customizationFee?: T;
@@ -2088,6 +2169,8 @@ export interface ProductsSelect<T extends boolean = true> {
   enableVariants?: T;
   variantTypes?: T;
   variants?: T;
+  priceInEGPEnabled?: T;
+  priceInEGP?: T;
   updatedAt?: T;
   createdAt?: T;
   deletedAt?: T;
@@ -2342,6 +2425,18 @@ export interface InquirySetting {
 export interface CommerceSetting {
   id: number;
   /**
+   * Edit the pilot JSON using status, public approval reference, and delivery and/or pickup. Courier rows use regionCode (for example EG-C), amount in EGP, and codAllowed. Pickup uses id, amount, codAllowed, and label, address and instructions with ar and en text. Set courierRemittanceEnabled to true only with merchant approval for finance to reconcile courier deposits. Save as owner_approved only after the merchant approves every enabled option. Clear this field to disable all physical fulfillment.
+   */
+  pilotFulfillment?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  /**
    * Status of the delivery tariff schedule per DECISIONS.md D-015.
    */
   tariffStatus: 'provisional' | 'owner_approved';
@@ -2436,6 +2531,7 @@ export interface InquirySettingsSelect<T extends boolean = true> {
  * via the `definition` "commerce-settings_select".
  */
 export interface CommerceSettingsSelect<T extends boolean = true> {
+  pilotFulfillment?: T;
   tariffStatus?: T;
   cairoAndGizaFee?: T;
   alexandriaFee?: T;

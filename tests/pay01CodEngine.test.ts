@@ -1,7 +1,9 @@
+import { openFixtureStock } from './fixtures/inventory';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { getPayload } from 'payload';
 import { NextRequest } from 'next/server';
 import configPromise from '@/payload.config';
+import { confirmedTestDelivery, setTestPilotFulfillment } from './fixtures/pilotFulfillment';
 import { getOrCreateCart } from '@/modules/cart-checkout/services/cartStorage';
 import { buildCheckoutQuote } from '@/modules/orders/services/checkoutQuote';
 import { createOrderFromCart } from '@/modules/orders/services/orderService';
@@ -41,8 +43,10 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
 
   const params = (id: any) => ({ params: Promise.resolve({ id: String(id) }) });
 
+  let restorePilotFulfillment: (() => Promise<void>) | undefined;
   beforeAll(async () => {
     payload = await getPayload({ config: configPromise });
+    restorePilotFulfillment = await setTestPilotFulfillment(payload);
 
     // Create operations staff user
     const opsPassword = 'OpsPassword2026!';
@@ -57,6 +61,7 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
     physicalProduct = await payload.create({
       collection: 'products',
       data: {
+        sku: 'PAY01-NOTEBOOK',
         title: 'PAY-01 Premium Leather Notebook',
         slug: `pay01-notebook-${unique()}`,
         itemType: 'physical',
@@ -66,6 +71,7 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
         _status: 'published',
       },
     });
+    await openFixtureStock(payload, 'product', physicalProduct.id);
 
     serviceProduct = await payload.create({
       collection: 'products',
@@ -84,6 +90,7 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
   });
 
   afterAll(async () => {
+    await restorePilotFulfillment?.();
     const del = async (collection: string, id: any, context?: any) => {
       try {
         await payload.delete({ collection, id, context });
@@ -156,11 +163,13 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
         customer: { email, password: 'Password2026!', companyName: 'Al-Ahram Group', contactPerson: 'Procurement Officer', phone: '+201099998888' },
         delivery: {
           method: 'shipping',
+          ...confirmedTestDelivery(quote),
           shippingAddress: { governorate: 'Cairo', city: 'Heliopolis', streetAddress: 'El Merghany' },
           expectedShippingFee: quote.shippingFee,
         },
         paymentMethod: 'cod',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
       });
 
       cleanup.orders.push(result.order.id);
@@ -191,9 +200,10 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
           cartId: cart.id,
           guestSecret: cart.secret,
           customer: { email, password: 'Password2026!', companyName: 'Digital Buyer', contactPerson: 'Lead', phone: '+201088887777' },
-          delivery: { method: 'pickup' },
+          delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
           paymentMethod: 'cod',
           expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
         })
       ).rejects.toThrow(/COD_PROHIBITED_FOR_DIGITAL/);
     });
@@ -220,9 +230,10 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
           cartId: cart.id,
           guestSecret: cart.secret,
           customer: { email, password: 'Password2026!', companyName: 'Mixed Buyer', contactPerson: 'Lead', phone: '+201077776666' },
-          delivery: { method: 'pickup' },
+          delivery: { method: 'pickup', ...confirmedTestDelivery(quote) },
           paymentMethod: 'cod',
           expectedGrandTotal: quote.grandTotal,
+          expectedQuoteConfirmation: quote.confirmation,
         })
       ).rejects.toThrow(/COD_PROHIBITED_FOR_MIXED_CART/);
     });
@@ -251,11 +262,13 @@ describe('PAY-01: Cash on Delivery (COD) Checkout & Decoupled Fulfillment Engine
         customer: { email, password: 'Password2026!', companyName: 'Decoupled Logistics Ltd', contactPerson: 'Dispatcher', phone: '+201066665555' },
         delivery: {
           method: 'shipping',
+          ...confirmedTestDelivery(quote),
           shippingAddress: { governorate: 'Cairo', city: 'Maadi', streetAddress: 'Degla' },
           expectedShippingFee: quote.shippingFee,
         },
         paymentMethod: 'cod',
         expectedGrandTotal: quote.grandTotal,
+        expectedQuoteConfirmation: quote.confirmation,
       });
 
       const orderId = result.order.id;

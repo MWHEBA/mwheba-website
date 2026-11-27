@@ -48,6 +48,7 @@ Build a unified, fast, SEO-friendly, content-managed website for MWHEBA Agency w
 ### B2B-specific rules
 - Default planning assumption: minimum quantity of 10 for eligible physical products, configurable per product; service packages usually quantity 1.
 - Enforce minimum quantity (10 units per Product ID with variant aggregation per D-009) strictly on the server at checkout, order creation, and payment initiation; incomplete quantities persist in cart with guidance notice.
+- Allocate tracked physical SKU quantities atomically with order creation. Do not reserve inventory in the cart. Uninitialized stock is unavailable until reconciled. Restore known allocations only through the authorized cancellation or inspected-return workflow in D-018.
 - Optional logo/artwork upload tied to a **specific cart/order line item**, not only to the customer or entire order.
 - Optional printing/customization notes per line item.
 - Artwork must be preserved as immutable order evidence after checkout.
@@ -77,14 +78,14 @@ Build a unified, fast, SEO-friendly, content-managed website for MWHEBA Agency w
 - Responsive and accessible UI; mobile-first.
 - Strong Core Web Vitals and SEO hygiene; set measurable targets during discovery.
 - Secure uploads, RBAC, audit logs, backups and recovery drills.
-- Transaction integrity and server-authoritative checkout validation (stock tracking and inventory reservations are strictly excluded per D-018).
+- Transaction integrity and server-authoritative checkout validation, including concurrent SKU stock allocation and audited restoration under D-018.
 - Local development reproducible with a local Node.js runtime and PostgreSQL; production targets cPanel without Docker or S3.
 - Observability for failed payments, webhook errors, and background jobs.
 - Staging before production; production migration with rollback plan.
 - Avoid unsupported performance/uptime claims until infrastructure is benchmarked.
 
 ## 8. Out of scope for initial release
-- Inventory tracking, stock levels, warehouse management, and stock reservations (strictly excluded per D-018; do not invent stock numbers; do not assume made-to-order for everything; keep inventory deferred).
+- Warehouse/location management and cart-level stock reservations remain out of scope per D-018. Do not invent opening balances or assume made-to-order for every item.
 - Subscription billing and automatic renewals.
 - Marketplace or multi-vendor functionality.
 - Full CRM, ERP, accounting system, or project management suite.
@@ -100,7 +101,7 @@ Build a unified, fast, SEO-friendly, content-managed website for MWHEBA Agency w
 - **Fulfillment: Shipping & Office Pickup (D-015):** Support both standard shipping and pickup from MWHEBA Agency Office at checkout.
 - **Minimum Order Quantity (D-009):** 10 units per individual Product ID. Variant aggregation permitted (e.g. 5 Black + 5 White mugs of Product #101 = PASS). Cross-product aggregation blocked (5 of Product A + 5 of Product B = BLOCKED). Incomplete cart persistence allowed; checkout strictly blocked server-side.
 - **Customization Pricing (D-017):** Printing and engraving charges calculated and displayed separately from base product price.
-- **Inventory & Stock Management (D-018):** Stock counts, inventory gating, and warehouse tracking are strictly OUT OF SCOPE for MVP (do not assume made-to-order for everything; keep inventory deferred).
+- **Inventory & Stock Management (D-018):** Tracked physical stock is allocated per sellable SKU with audited order movements and authorized restoration. Warehouse/location management and cart reservations are out of scope. Opening balances require authorized merchant data and reconciliation.
 - **Invoicing & Taxes (D-016):** No Egyptian Tax Authority (ETA) e-invoicing; no internal PDF invoice generator in MVP.
 
 ### Assumptions Pending Approval & Open Operational Details
